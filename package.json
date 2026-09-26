@@ -1,0 +1,33 @@
+{
+  "name": "webgpu-offshore-ship-sim",
+  "private": true,
+  "version": "0.0.0",
+  "description": "WebGPU açık deniz gemi simülatörü (FFT okyanus + 6DOF yüzerlik)",
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cf:dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p worker",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "lil-gui": "^0.21.0",
+    "wgpu-matrix": "^3.4.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260926.1",
+    "@webgpu/types": "^0.1.74",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2",
+    "wrangler": "^4.141.0"
+  }
+}
