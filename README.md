@@ -25,6 +25,30 @@ npm run typecheck  # TypeScript tip denetimi
 npm test           # Vitest birim testleri
 ```
 
+## Cloudflare Workers'a dağıtım
+
+Üretim derlemesi (`dist/`) [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/)
+olarak yüklenir ve her istek önce `worker/index.ts` üzerinden geçer. Worker
+yalnızca `GET`/`HEAD` kabul eder ve yanıtlara şu başlıkları ekler
+(`worker/headers.ts`):
+
+- **Önbellek:** içerik özetli `/assets/*` dosyaları 1 yıl `immutable`;
+  `index.html` ve diğer yollar her yüklemede yeniden doğrulanır, böylece yeni
+  dağıtım hemen görünür.
+- **Güvenlik:** `Content-Security-Policy` (yalnızca aynı köken; lil-gui'nin
+  satır içi stili ve gömülü yazı tipi için gerekli istisnalarla),
+  `X-Content-Type-Options`, `Referrer-Policy`, `Cross-Origin-Opener-Policy`,
+  `Permissions-Policy`.
+
+```bash
+npx wrangler login   # ilk seferde Cloudflare hesabına giriş
+npm run cf:dev       # derle + Worker'ı yerelde çalıştır (http://localhost:8787)
+npm run deploy       # derle + Cloudflare'e dağıt
+```
+
+Worker adı ve ayarları `wrangler.jsonc` içindedir. CI'da dağıtım için
+`CLOUDFLARE_API_TOKEN` ve `CLOUDFLARE_ACCOUNT_ID` ortam değişkenleri yeterlidir.
+
 ## Kontroller
 
 | Girdi | İşlev |
@@ -77,6 +101,8 @@ src/
   shaders/           *.wgsl (Vite ?raw ile içe aktarılır)
 tests/               Vitest birim testleri
 docs/PLAN.md         faz planı ve dosya listesi
+worker/              Cloudflare Worker: statik derlemeyi sunar, yanıt başlıkları
+wrangler.jsonc       Worker yapılandırması
 ```
 
 **Kare akışı:** Simülasyon, ekran yenileme hızından bağımsız olarak 120 Hz sabit
