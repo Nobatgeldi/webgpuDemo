@@ -6,13 +6,17 @@ import { FrameLoop, type FrameInfo } from './core/loop';
 import { ExponentialAverage, RateCounter, SimClock } from './core/time';
 import type { LaunchOptions } from './core/urlParams';
 import { Input } from './input/input';
+import { beaufortToWindSpeed, windSpeedToBeaufort } from './ocean/beaufort';
+import { Ocean } from './ocean/ocean';
+import { peakWavelength } from './ocean/spectrumModel';
+import { WindState } from './ocean/windState';
 import { Camera } from './render/camera';
 import { FrameUniforms } from './render/frameUniforms';
 import { GridPass } from './render/gridPass';
 import { DEPTH_CLEAR_VALUE, MAX_TIMED_PASSES } from './render/renderConfig';
 import { RenderTargets } from './render/renderTargets';
 import { TonemapPass } from './render/tonemapPass';
-import { createDefaultSettings, type AppSettings } from './settings';
+import { createDefaultSettings, roundWindSpeed, type AppSettings } from './settings';
 import { computeSkyState, type SkyState } from './sky/skyModel';
 import { SkyPass } from './sky/skyPass';
 import { DebugOverlay, type DebugSection } from './ui/debugOverlay';
@@ -29,6 +33,18 @@ const MAX_FRAME_SECONDS = 0.25;
 const FPS_WINDOW_MS = 500;
 /** Smoothing of the CPU frame time readout (frames). */
 const CPU_TIME_SMOOTHING_FRAMES = 30;
+
+/** Camera clearance above the mean sea level (m) ... */
+const CAMERA_MIN_CLEARANCE_M = 1.5;
+/**
+ * ... plus this multiple of Hs, a conservative bound of crest heights. Keeps the
+ * orbit camera out of the water until the water-height query (phase 3) exists.
+ */
+const CAMERA_CREST_ALLOWANCE_PER_HS = 1.2;
+
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+const METRES_PER_KM = 1000;
 
 const KEY_PAUSE = 'KeyP';
 const KEY_TOGGLE_UI = 'KeyH';
@@ -57,6 +73,7 @@ interface AppPasses {
   readonly skyPass: SkyPass;
   readonly gridPass: GridPass;
   readonly tonemapPass: TonemapPass;
+  readonly ocean: Ocean;
 }
 
 /**
@@ -78,6 +95,7 @@ export class App {
   private readonly debugOverlay: DebugOverlay;
   private readonly fps = new RateCounter(FPS_WINDOW_MS);
   private readonly cpuFrameMs = new ExponentialAverage(CPU_TIME_SMOOTHING_FRAMES);
+  private readonly wind: WindState;
 
   private sky: SkyState;
   private skyKey = '';
@@ -90,6 +108,7 @@ export class App {
   private readonly skyPass: SkyPass;
   private readonly gridPass: GridPass;
   private readonly tonemapPass: TonemapPass;
+  private readonly ocean: Ocean;
 
   private constructor(options: AppOptions, passes: AppPasses) {
     const { gpu, elements, launch } = options;
@@ -101,8 +120,18 @@ export class App {
     this.skyPass = passes.skyPass;
     this.gridPass = passes.gridPass;
     this.tonemapPass = passes.tonemapPass;
+    this.ocean = passes.ocean;
     this.settings = createDefaultSettings();
     this.settings.paused = launch.paused;
+    if (launch.beaufort !== null) {
+      this.settings.windSpeedMs = roundWindSpeed(beaufortToWindSpeed(launch.beaufort));
+      this.settings.windBeaufort = windSpeedToBeaufort(this.settings.windSpeedMs);
+    }
+    if (launch.windDirectionDeg !== null) {
+      this.settings.windDirectionDeg = launch.windDirectionDeg;
+    }
+    // Initial conditions apply immediately; later changes ramp in gradually.
+    this.wind = new WindState(this.settings.windSpeedMs, this.settings.windDirectionDeg * DEG_TO_RAD);
 
     this.input = new Input(elements.canvas);
     this.sizer = new CanvasSizer(
@@ -134,13 +163,15 @@ export class App {
   static async create(options: AppOptions): Promise<App> {
     const { device, canvasFormat } = options.gpu;
     const frameUniforms = new FrameUniforms(device);
+    const { quality, seed } = options.launch;
     // Pipelines compile in parallel.
-    const [skyPass, gridPass, tonemapPass] = await Promise.all([
+    const [skyPass, gridPass, tonemapPass, ocean] = await Promise.all([
       SkyPass.create(device, frameUniforms),
       GridPass.create(device, frameUniforms),
       TonemapPass.create(device, canvasFormat),
+      Ocean.create(device, frameUniforms, quality, seed),
     ]);
-    return new App(options, { frameUniforms, skyPass, gridPass, tonemapPass });
+    return new App(options, { frameUniforms, skyPass, gridPass, tonemapPass, ocean });
   }
 
   start(): void {
@@ -154,6 +185,8 @@ export class App {
   /** One fixed simulation step. Physics systems hook in here from phase 3 on. */
   private step(): void {
     this.clock.advance();
+    this.wind.setTarget(this.settings.windSpeedMs, this.settings.windDirectionDeg * DEG_TO_RAD);
+    this.wind.step(this.clock.stepSeconds);
   }
 
   private frame(frame: FrameInfo): void {
@@ -162,8 +195,16 @@ export class App {
     this.fps.tick(frame.timestampMs);
 
     this.handleShortcuts();
+    this.ocean.setSeaState({
+      windSpeedMs: this.wind.speedMs,
+      windFromRad: this.wind.fromDirectionRad,
+      fetchM: this.settings.fetchKm * METRES_PER_KM,
+      choppiness: this.settings.choppiness,
+    });
     this.orbit.handleInput(this.input);
-    this.orbit.update(this.camera, frame.frameSeconds);
+    const minAltitude =
+      CAMERA_MIN_CLEARANCE_M + CAMERA_CREST_ALLOWANCE_PER_HS * this.ocean.significantWaveHeightM;
+    this.orbit.update(this.camera, frame.frameSeconds, minAltitude);
 
     this.renderScene(frame);
 
@@ -214,6 +255,11 @@ export class App {
     this.timer.beginFrame();
     const encoder = device.createCommandEncoder({ label: 'frame' });
 
+    // Waves at the render instant: interpolated between the last two simulation steps.
+    const renderTime = this.clock.time + (this.settings.paused ? 0 : frame.alpha * this.clock.stepSeconds);
+    this.ocean.encodeSimulation(encoder, renderTime, this.timer.timestampWrites('ocean-sim'));
+    this.ocean.prepareDraw(this.camera);
+
     const scenePass = encoder.beginRenderPass({
       label: 'scene',
       colorAttachments: [
@@ -228,6 +274,7 @@ export class App {
       timestampWrites: this.timer.timestampWrites('scene'),
     });
     scenePass.setBindGroup(0, this.frameUniforms.bindGroup);
+    this.ocean.draw(scenePass);
     if (this.settings.showGrid) {
       this.gridPass.draw(scenePass);
     }
@@ -245,6 +292,7 @@ export class App {
     this.timer.resolve(encoder);
     device.queue.submit([encoder.finish()]);
     this.timer.afterSubmit();
+    this.ocean.afterSubmit();
   }
 
   /** Recomputes the sky only when the sun moved. */
@@ -264,6 +312,13 @@ export class App {
     const now = frame.timestampMs;
     this.hud.update(
       {
+        sea: {
+          beaufort: windSpeedToBeaufort(this.wind.speedMs),
+          windSpeedMs: this.wind.speedMs,
+          targetWindSpeedMs: this.wind.transitioning ? this.wind.targetSpeedMs : null,
+          windFromDeg: this.wind.fromDirectionRad * RAD_TO_DEG,
+          significantWaveHeightM: this.ocean.significantWaveHeightM,
+        },
         fps: this.fps.rate,
         cpuFrameMs: this.cpuFrameMs.value,
         gpuFrameMs: this.timer.frameMs,
@@ -276,6 +331,31 @@ export class App {
       now,
     );
     this.debugOverlay.update(now, () => this.debugSections());
+  }
+
+  private oceanDebugSection(): DebugSection {
+    const stats = this.ocean.stats;
+    if (!stats) {
+      return { title: 'Ocean', lines: ['(not initialised)'] };
+    }
+    const p = stats.jonswap;
+    const measured = stats.measuredSignificantWaveHeightM;
+    return {
+      title: 'Ocean',
+      lines: [
+        `FFT ${stats.fftSize}², cascades: ${stats.bands
+          .map((b) => `${b.patchSizeM} m [k ${b.kMin.toFixed(3)}–${b.kMax.toFixed(2)}]`)
+          .join(', ')}`,
+        `mesh: M=${this.ocean.quality.meshHalfCells}, ${this.ocean.quality.meshLevels} levels, s0=${this.ocean.quality.meshBaseSpacingM} m`,
+        p.calm
+          ? 'JONSWAP: calm'
+          : `JONSWAP: alpha=${p.alpha.toFixed(5)}, wp=${p.peakOmega.toFixed(3)} rad/s, ` +
+            `Lp=${peakWavelength(p).toFixed(1)} m, chi=${p.dimensionlessFetch.toFixed(0)}, ` +
+            `F_eff=${(p.effectiveFetchM / METRES_PER_KM).toFixed(0)} km`,
+        `Hs model ${stats.significantWaveHeightM.toFixed(2)} m, resolved ${stats.resolvedSignificantWaveHeightM.toFixed(2)} m, ` +
+          `GPU ${measured === null ? '–' : `${measured.toFixed(2)} m`}`,
+      ],
+    };
   }
 
   private debugSections(): DebugSection[] {
@@ -310,6 +390,7 @@ export class App {
           ...passLines,
         ],
       },
+      this.oceanDebugSection(),
       {
         title: 'Camera',
         lines: [

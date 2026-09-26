@@ -55,8 +55,11 @@ export class OrbitCameraController {
     }
   }
 
-  /** Advances smoothing by `dt` seconds (wall time) and writes the pose into `camera`. */
-  update(camera: Camera, dt: number): void {
+  /**
+   * Advances smoothing by `dt` seconds (wall time) and writes the pose into
+   * `camera`, keeping the camera at least `minAltitudeM` above sea level.
+   */
+  update(camera: Camera, dt: number, minAltitudeM: number): void {
     const blend = 1 - Math.exp(-dt / ORBIT_CAMERA_CONFIG.smoothingTimeConstantS);
     this.yaw += (this.yawGoal - this.yaw) * blend;
     this.pitch += (this.pitchGoal - this.pitch) * blend;
@@ -70,7 +73,7 @@ export class OrbitCameraController {
     const offsetZ = -this.distance * cosPitch * Math.cos(this.yaw);
 
     camera.position[0] = (this.target[0] as number) + offsetX;
-    camera.position[1] = (this.target[1] as number) + offsetY;
+    camera.position[1] = Math.max((this.target[1] as number) + offsetY, minAltitudeM);
     camera.position[2] = (this.target[2] as number) + offsetZ;
     camera.lookAt(this.target);
   }

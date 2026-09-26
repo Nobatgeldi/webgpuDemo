@@ -1,5 +1,12 @@
 import type { ToneMapper } from './render/tonemapPass';
 import { DEFAULT_PIXEL_RATIO_CAP } from './render/renderConfig';
+import { beaufortToWindSpeed } from './ocean/beaufort';
+
+/** Default sea state: moderate breeze (Bf 5) from the south-west over open ocean. */
+const DEFAULT_BEAUFORT = 5;
+const DEFAULT_WIND_DIRECTION_DEG = 225;
+const DEFAULT_FETCH_KM = 300;
+const DEFAULT_CHOPPINESS = 0.9;
 
 /**
  * Runtime-adjustable settings shared between the control panel and the
@@ -8,6 +15,16 @@ import { DEFAULT_PIXEL_RATIO_CAP } from './render/renderConfig';
  */
 export interface AppSettings {
   paused: boolean;
+  // Sea state
+  /** Beaufort class of windSpeedMs (kept in sync by the panel). */
+  windBeaufort: number;
+  /** Requested 10 m wind speed; the simulated wind approaches it gradually. */
+  windSpeedMs: number;
+  /** Direction the wind blows FROM, clockwise from north (deg). */
+  windDirectionDeg: number;
+  fetchKm: number;
+  /** Horizontal displacement scale lambda of the choppy waves. */
+  choppiness: number;
   // Display
   exposureEv: number;
   toneMapper: ToneMapper;
@@ -23,6 +40,11 @@ export interface AppSettings {
 }
 
 export const SETTINGS_LIMITS = {
+  windBeaufort: { min: 0, max: 12, step: 1 },
+  windSpeedMs: { min: 0, max: 40, step: 0.1 },
+  windDirectionDeg: { min: 0, max: 360, step: 1 },
+  fetchKm: { min: 1, max: 1000, step: 1 },
+  choppiness: { min: 0, max: 1.5, step: 0.05 },
   exposureEv: { min: -6, max: 6, step: 0.1 },
   ditherLsb: { min: 0, max: 2, step: 0.25 },
   pixelRatioCap: { min: 0.5, max: 3, step: 0.25 },
@@ -30,9 +52,19 @@ export const SETTINGS_LIMITS = {
   sunAzimuthDeg: { min: 0, max: 360, step: 1 },
 } as const;
 
+/** Wind speeds are shown and stored with the panel's 0.1 m/s resolution. */
+export function roundWindSpeed(speedMs: number): number {
+  return Math.round(speedMs / SETTINGS_LIMITS.windSpeedMs.step) * SETTINGS_LIMITS.windSpeedMs.step;
+}
+
 export function createDefaultSettings(): AppSettings {
   return {
     paused: false,
+    windBeaufort: DEFAULT_BEAUFORT,
+    windSpeedMs: roundWindSpeed(beaufortToWindSpeed(DEFAULT_BEAUFORT)),
+    windDirectionDeg: DEFAULT_WIND_DIRECTION_DEG,
+    fetchKm: DEFAULT_FETCH_KM,
+    choppiness: DEFAULT_CHOPPINESS,
     exposureEv: 0,
     toneMapper: 'aces',
     ditherLsb: 1,
@@ -41,6 +73,6 @@ export function createDefaultSettings(): AppSettings {
     sunAzimuthDeg: 135,
     uiVisible: true,
     debugOverlay: false,
-    showGrid: true,
+    showGrid: false,
   };
 }

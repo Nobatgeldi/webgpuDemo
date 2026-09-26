@@ -43,7 +43,7 @@ src/core/
   gpuTimer.ts            timestamp-query ile GPU süreleri                       (0)
   urlParams.ts           ?wind=&dir=&seed=&quality=&paused=                     (0)
   random.ts              seed'li PRNG + Box-Muller Gauss                        (1)
-  constants.ts           g, ρ_su, ρ_hava, ν (kinematik viskozite)               (1)
+  constants.ts           fiziksel sabitler (g; ρ, ν Faz 3'te)                   (1)
 src/render/
   renderConfig.ts, camera.ts, frameUniforms.ts, renderTargets.ts             (0)
   tonemapPass.ts         ACES/AgX + sRGB + dither                              (0)
@@ -52,15 +52,18 @@ src/render/
   debugTextureView.ts    FFT/spektrum doku görüntüleyici                       (2)
   debugLines.ts          kuvvet vektörleri, batmış üçgenler                    (3)
 src/ocean/
+  oceanConfig.ts         kaskad boyutları/bantları, kalite ön ayarları        (1)
   beaufort.ts            Bf ↔ m/s tablosu (doğrulama referansı)                (1)
   spectrumModel.ts       JONSWAP, yön dağılımı, fetch sınırı, Hs (CPU referansı) (1)
-  spectrum.ts            GPU h0 üretimi (compute), rüzgâr geçişi               (1)
+  spectrum.ts            GPU h0 üretimi (compute)                              (1)
   fftReference.ts        WGSL FFT'nin TS referansı (testler için)             (1)
   fft.ts                 GPU FFT (workgroup shared memory, Stockham radix-2)  (1)
   cascades.ts            3 kaskad, zaman evrimi, çıktı dokuları, mipmap        (1)
   oceanMesh.ts           kamera merkezli clipmap halkaları, morph, snap        (1)
   oceanPass.ts           okyanus çizimi                                        (1, 2)
+  ocean.ts               simülasyon + çizimi birleştiren sınıf                 (1)
   windState.ts           hedef rüzgâra ~1 (m/s)/s ile yaklaşma                 (1)
+src/core/bindings.ts     bind group layout girdisi yardımcıları               (1)
   foam.ts                Jacobian köpüğü, ping-pong kalıcı köpük               (2)
   waterQuery.ts          GPU yükseklik sorgusu + WaterHeightProvider (GPU)    (3)
 src/sky/
@@ -99,7 +102,7 @@ dither, reversed-Z derinlik, orbit kamera, analitik gökyüzü gradyanı, debug
 referans ızgarası, lil-gui panel, HUD (FPS, CPU/GPU süresi), debug katmanı,
 URL parametre ayrıştırıcı, birim testleri.
 
-### Faz 1 — Okyanus çekirdeği
+### Faz 1 — Okyanus çekirdeği ✅
 1. `beaufort.ts` + test (Bf ↔ m/s).
 2. `spectrumModel.ts`: JONSWAP (α = 0.076 χ^−0.22, ω_p = 22 (g/U) χ^−0.33,
    γ = 3.3), Donelan-Banner yön dağılımı, rüzgâra ters bileşen bastırma, U → 0

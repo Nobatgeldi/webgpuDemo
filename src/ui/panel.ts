@@ -1,6 +1,7 @@
 import GUI from 'lil-gui';
-import { SETTINGS_LIMITS, type AppSettings } from '../settings';
+import { SETTINGS_LIMITS, roundWindSpeed, type AppSettings } from '../settings';
 import type { ToneMapper } from '../render/tonemapPass';
+import { beaufortToWindSpeed, windSpeedToBeaufort } from '../ocean/beaufort';
 
 const TONE_MAPPER_OPTIONS: Record<string, ToneMapper> = {
   'ACES (film)': 'aces',
@@ -9,7 +10,7 @@ const TONE_MAPPER_OPTIONS: Record<string, ToneMapper> = {
 
 /**
  * Settings panel (lil-gui). Only controls for features that exist are shown;
- * later phases add wind/sea state, quality and debug sections.
+ * later phases add quality presets and further debug views.
  */
 export class ControlPanel {
   private readonly gui: GUI;
@@ -17,11 +18,34 @@ export class ControlPanel {
   constructor(settings: AppSettings, callbacks: { onPixelRatioCapChange(cap: number): void }) {
     this.gui = new GUI({ title: 'Ayarlar', width: 300 });
 
+    const L = SETTINGS_LIMITS;
     const simulation = this.gui.addFolder('Simülasyon');
     simulation.add(settings, 'paused').name('Duraklat (P)');
 
+    const sea = this.gui.addFolder('Rüzgâr ve deniz');
+    const beaufort = sea
+      .add(settings, 'windBeaufort', L.windBeaufort.min, L.windBeaufort.max, L.windBeaufort.step)
+      .name('Rüzgâr (Beaufort)');
+    const speed = sea
+      .add(settings, 'windSpeedMs', L.windSpeedMs.min, L.windSpeedMs.max, L.windSpeedMs.step)
+      .name('Rüzgâr hızı (m/s)');
+    beaufort.onChange((value: number) => {
+      settings.windSpeedMs = roundWindSpeed(beaufortToWindSpeed(value));
+      speed.updateDisplay();
+    });
+    speed.onChange((value: number) => {
+      settings.windBeaufort = windSpeedToBeaufort(value);
+      beaufort.updateDisplay();
+    });
+    sea
+      .add(settings, 'windDirectionDeg', L.windDirectionDeg.min, L.windDirectionDeg.max, L.windDirectionDeg.step)
+      .name('Rüzgâr yönü (°, geldiği)');
+    sea.add(settings, 'fetchKm', L.fetchKm.min, L.fetchKm.max, L.fetchKm.step).name('Fetch (km)');
+    sea
+      .add(settings, 'choppiness', L.choppiness.min, L.choppiness.max, L.choppiness.step)
+      .name('Dalga keskinliği');
+
     const sun = this.gui.addFolder('Güneş');
-    const L = SETTINGS_LIMITS;
     sun
       .add(settings, 'sunElevationDeg', L.sunElevationDeg.min, L.sunElevationDeg.max, L.sunElevationDeg.step)
       .name('Yükseklik (°)');

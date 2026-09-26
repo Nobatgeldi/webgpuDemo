@@ -1,12 +1,22 @@
 /**
  * Heads-up display: plain HTML overlay, updated at a limited rate so DOM work
- * stays negligible. Ship/wind readouts are added in later phases.
+ * stays negligible. Ship readouts are added in later phases.
  */
 
 /** HUD text refresh interval (ms). */
 const HUD_REFRESH_INTERVAL_MS = 250;
 
+export interface HudSeaState {
+  readonly beaufort: number;
+  readonly windSpeedMs: number;
+  /** Requested wind speed while the wind is still changing, otherwise null. */
+  readonly targetWindSpeedMs: number | null;
+  readonly windFromDeg: number;
+  readonly significantWaveHeightM: number;
+}
+
 export interface HudStats {
+  readonly sea: HudSeaState;
   readonly fps: number;
   readonly cpuFrameMs: number | null;
   /** Null when timestamp queries are unavailable. */
@@ -19,7 +29,10 @@ export interface HudStats {
 }
 
 export class Hud {
-  private readonly fields: Record<'fps' | 'cpu' | 'gpu' | 'resolution' | 'simTime', HTMLElement>;
+  private readonly fields: Record<
+    'wind' | 'windDirection' | 'hs' | 'fps' | 'cpu' | 'gpu' | 'resolution' | 'simTime',
+    HTMLElement
+  >;
   private readonly pausedBanner: HTMLElement;
   private lastRefreshMs = Number.NEGATIVE_INFINITY;
 
@@ -29,6 +42,9 @@ export class Hud {
     this.pausedBanner.hidden = true;
     root.append(this.pausedBanner);
     this.fields = {
+      wind: this.addRow('Rüzgâr'),
+      windDirection: this.addRow('Rüzgâr yönü (geldiği)'),
+      hs: this.addRow('Belirgin dalga yük. Hs'),
       fps: this.addRow('FPS'),
       cpu: this.addRow('CPU kare süresi'),
       gpu: this.addRow('GPU süresi'),
@@ -46,6 +62,11 @@ export class Hud {
     }
     this.lastRefreshMs = nowMs;
     this.pausedBanner.hidden = !stats.paused;
+    const sea = stats.sea;
+    const target = sea.targetWindSpeedMs === null ? '' : ` → ${sea.targetWindSpeedMs.toFixed(1)}`;
+    this.fields.wind.textContent = `Bf ${sea.beaufort} · ${sea.windSpeedMs.toFixed(1)}${target} m/s`;
+    this.fields.windDirection.textContent = `${Math.round(sea.windFromDeg) % 360}°`;
+    this.fields.hs.textContent = `${sea.significantWaveHeightM.toFixed(2)} m`;
     this.fields.fps.textContent = stats.fps.toFixed(0);
     this.fields.cpu.textContent = stats.cpuFrameMs === null ? '–' : `${stats.cpuFrameMs.toFixed(2)} ms`;
     this.fields.gpu.textContent = !stats.gpuTimingSupported
