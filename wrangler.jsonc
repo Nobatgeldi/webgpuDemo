@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "webgpudemo",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-26",
+  "assets": {
+    // Vite production build output (`npm run build`).
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // Route every request through the Worker so it can set response headers.
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true
+  },
+  "previews": {}
+}
