@@ -4,7 +4,7 @@ import { composeWgsl, createShaderModule } from '../core/shader';
 import { WGSL } from '../shaders';
 import { SPECTRUM_SHADER_CONSTANTS } from './spectrumModel';
 
-export const OCEAN_COMPUTE_UNIFORM_BYTES = 96;
+export const OCEAN_COMPUTE_UNIFORM_BYTES = 128;
 const SPECTRUM_WORKGROUP = 8;
 const NOISE_CHANNELS = 2;
 

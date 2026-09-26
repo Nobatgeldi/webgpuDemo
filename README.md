@@ -4,8 +4,9 @@ Tarayıcıda çalışan, ham WebGPU + WGSL ile yazılmış bir açık deniz gemi
 simülatörü. Hedef: rüzgâra göre fiziksel olarak tutarlı üretilen FFT okyanusu
 ve bu dalgalara gerçek kuvvetlerle tepki veren 6 serbestlik dereceli bir gemi.
 
-> **Durum:** Faz 0 (iskelet) ve Faz 1 (FFT okyanus çekirdeği) tamamlandı.
-> Görsel kalite, gemi ve fizik sonraki fazlarda eklenecek; yol haritası için
+> **Durum:** Faz 0 (iskelet), Faz 1 (FFT okyanus çekirdeği) ve Faz 2 (görsel
+> kalite: fiziksel atmosfer, köpük, SSS, parıldamaya karşı pürüzlülük)
+> tamamlandı. Gemi ve fizik sonraki fazlarda eklenecek; yol haritası için
 > [docs/PLAN.md](docs/PLAN.md).
 
 ## Gereksinimler
@@ -74,7 +75,8 @@ src/
                      time, cameraRelative, canvasSize, readback, gpuTimer, urlParams
   render/            camera (reversed-Z), frameUniforms, renderTargets,
                      tonemapPass (ACES/AgX), gridPass (debug ızgarası)
-  sky/               skyModel (güneş konumu/ışınımı), skyPass
+  sky/               atmosphereModel (fiziksel atmosfer, CPU referansı), atmosphere
+                     (transmittance/sky-view LUT'ları, gökyüzü ışınımı), skyPass
   ocean/             beaufort, spectrumModel (JONSWAP + Donelan-Banner, CPU referansı),
                      windState, fftReference, spectrum/fft/cascades (GPU simülasyonu),
                      oceanMesh (clipmap), oceanPass (çizim), ocean (birleştirici)
@@ -104,9 +106,28 @@ sayısı bantlarını taşır. Yüzey, kameraya göre grid'e oturtulmuş eş mer
 clipmap halkalarıyla çizilir; halka sınırlarında geomorph ve eşleşen mip seçimi
 çatlakları önler, en dış halka düz bir eteklikle ufka (80 km) uzanır.
 
+**Gökyüzü ve ışık:** Rayleigh + Mie + ozon içeren fiziksel atmosfer (Hillaire
+2020 yaklaşımı): bir kez hesaplanan transmittance LUT'u, güneş veya bulut örtüsü
+değiştiğinde yeniden hesaplanan sky-view LUT'u ve ondan integre edilen gökyüzü
+ışınımı. Doğrudan güneş ışığı aynı modelin CPU kopyasından gelir. Güçlü
+rüzgârda (Bf 6 → 10) gökyüzü CIE standart kapalı gökyüzüne dönüşür, doğrudan
+güneş zayıflar, pus yoğunlaşır. Otomatik pozlama gökyüzü parlaklığına uyum sağlar.
+
+**Su gölgelendirmesi:** Schlick Fresnel ile gökyüzü yansıması ve su gövdesinden
+saçılan ışık; GGX güneş parlaması. Parlamanın genişliği, piksel izdüşümünde
+dokuların çözemediği eğim varyansından gelir: Cox-Munk ölçümüne göre toplam
+eğim varyansından spektrumun çözülen kısmı çıkarılır (uzakta parıldama olmaz,
+güneş yolu doğru genişlikte kalır). Dalga tepelerinden geçen ışık için SSS
+yaklaşımı. Köpük: Jacobian eşiğin altına düşünce enjekte edilir, ping-pong
+dokuda üstel olarak söner ve dalgalarla birlikte sürüklenir; eşik, köpük
+örtüsü Monahan bağıntısını tutacak şekilde spektrumdan kalibre edilir.
+
 **Doğrulama:** Debug katmanı (F), spektrumdan hesaplanan Hs'yi GPU yükseklik
-alanlarından asenkron ölçülen Hs ile karşılaştırır (ör. Bf 8: model 6.53 m,
-GPU 6.46 m).
+alanlarından asenkron ölçülen Hs ile, GPU'da ölçülen köpük örtüsünü de Monahan
+bağıntısıyla karşılaştırır (ör. Bf 8: Hs model 6.53 m / GPU 6.46 m; Bf 10:
+köpük %28.9 / Monahan %27.0). Hata ayıklama panelindeki doku görüntüleyici
+spektrumu, yer değiştirme ve türev dokularını, köpük/Jacobian'ı ve atmosfer
+LUT'larını gösterir; tel kafes görünümü LOD halkalarını renklendirir.
 
 **Hassasiyet:** Dünya konumları CPU'da `double` tutulur; GPU'ya kameraya göreli
 float32 gönderilir ve view matrisi yalnızca rotasyon içerir. Periyodik desenler
@@ -166,22 +187,33 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 - **Rüzgâr yönü**, denizcilikteki meteorolojik kurala göre rüzgârın *geldiği*
   yöndür (ör. 45° = kuzeydoğudan esen rüzgâr); dalgalar bunun tersine, rüzgârın
   gittiği yöne ilerler.
-- **Faz 0 gökyüzü** analitik bir gradyandır: doğrudan güneş ışığı gerçek hava
-  kütlesi formülü (Kasten & Young 1989) ve yaklaşık açık hava optik
-  derinlikleriyle zayıflatılır; kubbe renkleri sanatsal anahtar renklerdir.
-  Faz 2'de fiziksel tek saçılımlı atmosfer modeliyle değiştirilecek.
-- **Işınım birimleri** şimdilik görelidir (öğlen zenit gökyüzü ≈ 1); güneş
-  diski/gökyüzü oranı (~2·10⁵) gerçek dünyadaki büyüklük mertebesiyle uyumlu
-  seçildi, böylece doğrudan/dağınık ışınım oranı açık bir günde olduğu gibi
-  ~4:1 çıkar.
+- **Atmosfer:** Dünya parametreleri (Rayleigh 5.8/13.6/33.1·10⁻⁶ m⁻¹, H = 8 km;
+  Mie 4·10⁻⁶ m⁻¹, H = 1.2 km, g = 0.8; ozon 25 km merkezli). Çoklu saçılım,
+  tek saçılım kaynağının %35'i kadar izotropik bir terimle yaklaşık alınır
+  (Hillaire'in MS LUT'u yerine). Gözlemci deniz seviyesindedir.
+- **Işınım birimleri** görelidir: atmosfer dışında güneş ışınımı ≈ 4 (R/G/B
+  3.2/4.0/4.1); güneş diski parlaklığı (~5·10⁴) böylece `rgba16float` aralığında
+  kalır. Ekrana eşleme otomatik pozlamayla yapılır (anahtar 0.6; ortalama
+  gökyüzü parlaklığı 0.002'nin altına inince gece karanlık kalır).
+- **Fırtına gökyüzü:** Bulut örtüsü 12 → 26 m/s rüzgârda 0 → 0.9'a yükselir;
+  bulutlar doğrudan güneşin (1 − örtü) kadarını geçirir ve açık gökyüzü küresel
+  ışınımının %35'ini dağınık ışık olarak iletir (CIE kapalı gökyüzü dağılımı).
+  Panelden kapatılabilir.
+- **Köpük:** Yalnızca iki uzun dalga kaskadı köpürür; ömür 4 s (e-katlanma).
+  Etkin kırılma payı, Monahan örtüsünün %40'ı olarak alınmış ve kalıcı durumda
+  GPU ölçümünün Monahan'ı ±%20 içinde izlemesi için ayarlanmıştır.
 - **Kamera uzak düzlemi** 100 km (400 m yükseklikten geometrik ufuk ~71 km).
 - **Piksel oranı** varsayılan olarak 2 ile sınırlıdır (panelden ayarlanabilir).
 
 ## Bilinen sınırlamalar
 
 - Gemi, fizik ve gemiye rüzgâr etkileri henüz yok (Faz 3–5).
-- Okyanus gölgelendirmesi temel düzeydedir: köpük, alt yüzey saçılımı, fiziksel
-  atmosfer ve mesafeye bağlı pürüzlülük (uzak parıldamaya karşı) Faz 2'de.
+- Köpük dokusu en büyük kaskadın çözünürlüğündedir; düşük kalitede (128²)
+  yakın plandaki köpük lekeleri iri görünür.
+- Çok yüksekten bakıldığında en büyük kaskadın 1 km'lik tekrarını kırmak için
+  ayrı bir düşük frekanslı modülasyon yoktur (normal kamera mesafelerinde fark
+  edilmedi).
+- Gece gökyüzü (ay, yıldızlar) ve gerçek bulut geometrisi yoktur.
 - Dalga yer değiştirmesi en dış clipmap halkasında (~8–10 km) sönümlenir;
   ötesindeki eteklik düzdür (dalgalar yalnızca normal dokularıyla görünür).
 - Kalite ön ayarı çalışma anında değiştirilemez (yalnızca URL).

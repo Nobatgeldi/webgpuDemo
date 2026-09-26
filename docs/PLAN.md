@@ -67,7 +67,8 @@ src/core/bindings.ts     bind group layout girdisi yardımcıları              
   foam.ts                Jacobian köpüğü, ping-pong kalıcı köpük               (2)
   waterQuery.ts          GPU yükseklik sorgusu + WaterHeightProvider (GPU)    (3)
 src/sky/
-  skyModel.ts, skyPass.ts   F0: analitik gradyan                               (0)
+  skyPass.ts             gökyüzü çizimi                                          (0)
+  atmosphereModel.ts     atmosfer fiziği, CPU referansı + WGSL sabitleri      (2)
   atmosphere.ts          fiziksel tek saçılım: transmittance + sky-view LUT    (2, skyModel'in yerini alır)
 src/ship/
   shipConfig.ts          ~50 m devriye gemisi parametreleri                    (3)
@@ -122,7 +123,7 @@ URL parametre ayrıştırıcı, birim testleri.
 8. `oceanPass.ts`: temel shading (Fresnel + gökyüzü + güneş), sis.
 9. Panel: Beaufort ↔ m/s senkron kaydırıcılar, yön, fetch, choppiness; HUD: Hs.
 
-### Faz 2 — Görsel kalite
+### Faz 2 — Görsel kalite ✅
 Fiziksel atmosfer (Rayleigh + Mie + ozon, Hillaire tarzı LUT'lar), güneş
 diski ve ışınımı atmosferden; Schlick Fresnel, GGX güneş parlaması, gökyüzü
 yansıması, SSS yaklaşımı, Jacobian köpüğü + kalıcı köpük (ping-pong, üstel

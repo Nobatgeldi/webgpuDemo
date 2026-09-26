@@ -1,4 +1,5 @@
 import type { ToneMapper } from './render/tonemapPass';
+import type { DebugTextureName } from './render/debugTextureView';
 import { DEFAULT_PIXEL_RATIO_CAP } from './render/renderConfig';
 import { beaufortToWindSpeed } from './ocean/beaufort';
 
@@ -26,6 +27,8 @@ export interface AppSettings {
   /** Horizontal displacement scale lambda of the choppy waves. */
   choppiness: number;
   // Display
+  /** Exposure adapts to the sky brightness; exposureEv is then a compensation. */
+  autoExposure: boolean;
   exposureEv: number;
   toneMapper: ToneMapper;
   ditherLsb: number;
@@ -33,10 +36,15 @@ export interface AppSettings {
   // Sun
   sunElevationDeg: number;
   sunAzimuthDeg: number;
+  /** Cloud cover and a darker sky in strong wind. */
+  stormClouds: boolean;
   // UI / debug
   uiVisible: boolean;
   debugOverlay: boolean;
   showGrid: boolean;
+  oceanWireframe: boolean;
+  debugTexture: DebugTextureName;
+  debugTextureCascade: number;
 }
 
 export const SETTINGS_LIMITS = {
@@ -65,14 +73,19 @@ export function createDefaultSettings(): AppSettings {
     windDirectionDeg: DEFAULT_WIND_DIRECTION_DEG,
     fetchKm: DEFAULT_FETCH_KM,
     choppiness: DEFAULT_CHOPPINESS,
+    autoExposure: true,
     exposureEv: 0,
     toneMapper: 'aces',
     ditherLsb: 1,
     pixelRatioCap: DEFAULT_PIXEL_RATIO_CAP,
     sunElevationDeg: 25,
     sunAzimuthDeg: 135,
+    stormClouds: true,
     uiVisible: true,
     debugOverlay: false,
     showGrid: false,
+    oceanWireframe: false,
+    debugTexture: 'none',
+    debugTextureCascade: 0,
   };
 }

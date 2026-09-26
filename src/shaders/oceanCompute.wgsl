@@ -14,6 +14,10 @@ struct OceanComputeUniforms {
   jonswap: vec4<f32>,
   // xy: unit vector of wave propagation (downwind), z: choppiness lambda, w: cascade count
   wind: vec4<f32>,
+  // x: time step (s), y: foam decay time (s)
+  foam: vec4<f32>,
+  // Foam injection per foam cascade: x/z: Jacobian threshold, y/w: softness (cascade 0 / 1)
+  foamCascades: vec4<f32>,
   // per cascade: x: patch size L (m), y: k min, z: k max (rad/m)
   cascades: array<vec4<f32>, 3>,
 }

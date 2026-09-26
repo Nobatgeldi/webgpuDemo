@@ -1,5 +1,6 @@
-// HDR -> display pass: exposure, tone mapping (ACES fit or AgX), sRGB encoding
-// and triangular dithering against banding in smooth gradients (sky).
+// HDR -> display pass: exposure (manual, optionally adapted to the sky
+// brightness), tone mapping (ACES fit or AgX), sRGB encoding and triangular
+// dithering against banding in smooth gradients (sky).
 // Requires common.wgsl.
 
 struct TonemapUniforms {
@@ -10,7 +11,15 @@ struct TonemapUniforms {
   // Dither amplitude in output code values (1 = +-1 LSB triangular).
   ditherLsb: f32,
   frameIndex: u32,
+  // x: auto exposure on (0/1), y: target exposed mean sky radiance, z: minimum adaptation radiance
+  autoExposure: vec4<f32>,
 }
+
+struct SkyLight {
+  irradiance: vec4<f32>,
+}
+
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 // True when the swap chain view is not an -srgb format and encoding must happen here.
 override MANUAL_SRGB_ENCODE: bool = true;
@@ -22,6 +31,7 @@ const TONEMAP_AGX: u32 = 1u;
 
 @group(0) @binding(0) var<uniform> params: TonemapUniforms;
 @group(0) @binding(1) var hdrTexture: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> skyLight: SkyLight;
 
 // --- ACES filmic fit (Stephen Hill, BakingLab; MIT). Matrices are column-major. ---
 const ACES_INPUT: mat3x3<f32> = mat3x3<f32>(
@@ -100,7 +110,14 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> FullscreenVertex {
 @fragment
 fn fsMain(in: FullscreenVertex) -> @location(0) vec4<f32> {
   let pixel = vec2<u32>(in.position.xy);
-  let hdr = textureLoad(hdrTexture, vec2<i32>(pixel), 0).rgb * params.exposure;
+  var exposure = params.exposure;
+  if (params.autoExposure.x > 0.5) {
+    // Adapt to the mean sky radiance so that day, dusk and storm stay readable;
+    // below the floor the scene is allowed to get dark (night).
+    let meanSkyRadiance = dot(skyLight.irradiance.rgb, LUMA) / PI;
+    exposure *= params.autoExposure.y / max(meanSkyRadiance, params.autoExposure.z);
+  }
+  let hdr = textureLoad(hdrTexture, vec2<i32>(pixel), 0).rgb * exposure;
 
   var display: vec3<f32>;
   if (params.operatorId == TONEMAP_AGX) {

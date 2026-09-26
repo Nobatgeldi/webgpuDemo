@@ -19,16 +19,28 @@ const FIELD_FORMAT: GPUTextureFormat = 'rgba32float';
 /** Two rgba32float layers (four packed complex FFTs) per cascade. */
 const FIELD_LAYERS_PER_CASCADE = 2;
 const TEXEL_WORKGROUP = 8;
-/** GPU significant-wave-height measurement interval (frames). */
+/** GPU statistics (Hs, whitecap coverage) measurement interval (frames). */
 const STATS_INTERVAL_FRAMES = 30;
 const STATS_STAGING_BUFFERS = 2;
+/** Statistics per row: sum of h^2 and number of foam texels. */
+const STATS_VALUES_PER_ROW = 2;
+/** Cascades that carry foam (must match FOAM_CASCADE_COUNT in oceanAssemble.wgsl). */
+export const FOAM_CASCADE_COUNT = 2;
+/** Jacobian threshold that is never reached (no foam). */
+export const NO_FOAM_THRESHOLD = -10;
+/** Longest simulation step used for foam decay (s); protects against hitches. */
+const MAX_FOAM_STEP_S = 0.25;
 
 /** Float offsets inside OceanComputeUniforms (shaders/oceanCompute.wgsl); verified by tests. */
-export const OCEAN_COMPUTE_UNIFORM_OFFSETS = { grid: 0, jonswap: 4, wind: 8, cascades: 12 } as const;
-const U_GRID = OCEAN_COMPUTE_UNIFORM_OFFSETS.grid;
-const U_JONSWAP = OCEAN_COMPUTE_UNIFORM_OFFSETS.jonswap;
-const U_WIND = OCEAN_COMPUTE_UNIFORM_OFFSETS.wind;
-const U_CASCADES = OCEAN_COMPUTE_UNIFORM_OFFSETS.cascades;
+export const OCEAN_COMPUTE_UNIFORM_OFFSETS = {
+  grid: 0,
+  jonswap: 4,
+  wind: 8,
+  foam: 12,
+  foamCascades: 16,
+  cascades: 20,
+} as const;
+const U = OCEAN_COMPUTE_UNIFORM_OFFSETS;
 
 export interface CascadeSeaState {
   readonly jonswap: JonswapParameters;
@@ -38,16 +50,33 @@ export interface CascadeSeaState {
   readonly choppiness: number;
 }
 
+export interface FoamParameters {
+  /** e-folding time of foam decay (s). */
+  readonly decayTimeS: number;
+  /** Per foam cascade: foam starts where the Jacobian drops below this value ... */
+  readonly jacobianThresholds: readonly number[];
+  /** ... and is fully injected this much further below. */
+  readonly softness: readonly number[];
+}
+
+interface ComputeStage {
+  readonly pipeline: GPUComputePipeline;
+  readonly bindGroups: readonly GPUBindGroup[];
+}
+
 /**
  * GPU wave simulation for all cascades: initial spectrum (on sea-state change),
  * time evolution, inverse FFT, unpacking into filterable displacement and
- * derivative textures, and their mip chains.
+ * derivative textures, persistent foam, and the mip chains of all outputs.
+ * Foam alternates between two textures (read previous, write current).
  */
 export class OceanCascades {
   /** (lambda Dx, h, lambda Dz, lambda dDx/dz) per cascade layer, with mips. */
   readonly displacement: GPUTexture;
   /** (dh/dx, dh/dz, lambda dDx/dx, lambda dDz/dz) per cascade layer, with mips. */
   readonly derivatives: GPUTexture;
+  /** Ping-pong foam textures (x: foam, y: Jacobian), with mips. */
+  readonly foam: readonly [GPUTexture, GPUTexture];
   readonly mipLevelCount: number;
 
   private readonly uniformBuffer: GPUBuffer;
@@ -59,8 +88,12 @@ export class OceanCascades {
   private spectrumDirty = true;
   private lastSeaStateKey = '';
   private frameCounter = 0;
+  /** Index of the foam texture written by the latest encode(). */
+  private foamIndex = 0;
+  private lastTime: number | null = null;
   private statsPending: GPUBuffer | null = null;
   private measuredHs: number | null = null;
+  private measuredFoamCoverage: number | null = null;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -68,11 +101,16 @@ export class OceanCascades {
     readonly bands: readonly CascadeBand[],
     private readonly spectrum: SpectrumPass,
     private readonly fft: FftPass,
-    private readonly passes: {
-      evolve: { pipeline: GPUComputePipeline; bindGroup: GPUBindGroup };
-      assemble: { pipeline: GPUComputePipeline; bindGroup: GPUBindGroup };
-      mips: { pipeline: GPUComputePipeline; bindGroups: GPUBindGroup[] };
-      stats: { pipeline: GPUComputePipeline; bindGroup: GPUBindGroup };
+    private readonly stages: {
+      evolve: ComputeStage;
+      /** Index = foam texture written. */
+      assemble: ComputeStage;
+      /** Mip bind groups of displacement and derivatives. */
+      mips: ComputeStage;
+      /** Mip bind groups per foam texture. */
+      foamMips: readonly (readonly GPUBindGroup[])[];
+      /** Index = current foam texture. */
+      stats: ComputeStage;
     },
     resources: {
       uniformBuffer: GPUBuffer;
@@ -80,6 +118,7 @@ export class OceanCascades {
       scratch: GPUTexture;
       displacement: GPUTexture;
       derivatives: GPUTexture;
+      foam: [GPUTexture, GPUTexture];
       statsBuffer: GPUBuffer;
     },
   ) {
@@ -88,24 +127,23 @@ export class OceanCascades {
     this.scratch = resources.scratch;
     this.displacement = resources.displacement;
     this.derivatives = resources.derivatives;
+    this.foam = resources.foam;
     this.statsBuffer = resources.statsBuffer;
     this.mipLevelCount = resources.displacement.mipLevelCount;
-    this.statsRing = new ReadbackRing(
-      device,
-      resources.statsBuffer.size,
-      STATS_STAGING_BUFFERS,
-      'ocean-stats',
-    );
+    this.statsRing = new ReadbackRing(device, resources.statsBuffer.size, STATS_STAGING_BUFFERS, 'ocean-stats');
 
     const d = this.uniformData;
-    d[U_GRID] = size;
-    d[U_GRID + 1] = GRAVITY_M_S2;
-    d[U_GRID + 2] = (2 * Math.PI) / OCEAN_TIME_LOOP_S;
-    d[U_WIND + 3] = bands.length;
+    d[U.grid] = size;
+    d[U.grid + 1] = GRAVITY_M_S2;
+    d[U.grid + 2] = (2 * Math.PI) / OCEAN_TIME_LOOP_S;
+    d[U.wind + 3] = bands.length;
+    d[U.foam + 1] = 1; // decay time, set properly by setFoam()
+    d[U.foamCascades] = NO_FOAM_THRESHOLD;
+    d[U.foamCascades + 2] = NO_FOAM_THRESHOLD;
     bands.forEach((band, c) => {
-      d[U_CASCADES + 4 * c] = band.patchSizeM;
-      d[U_CASCADES + 4 * c + 1] = band.kMin;
-      d[U_CASCADES + 4 * c + 2] = band.kMax;
+      d[U.cascades + 4 * c] = band.patchSizeM;
+      d[U.cascades + 4 * c + 1] = band.kMin;
+      d[U.cascades + 4 * c + 2] = band.kMax;
     });
   }
 
@@ -146,9 +184,10 @@ export class OceanCascades {
     const scratch = fieldTexture('ocean-fft-scratch');
     const displacement = outputTexture('ocean-displacement');
     const derivatives = outputTexture('ocean-derivatives');
+    const foam: [GPUTexture, GPUTexture] = [outputTexture('ocean-foam-0'), outputTexture('ocean-foam-1')];
     const statsBuffer = device.createBuffer({
       label: 'ocean-stats',
-      size: cascades * size * Float32Array.BYTES_PER_ELEMENT,
+      size: STATS_VALUES_PER_ROW * cascades * size * Float32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
 
@@ -177,6 +216,8 @@ export class OceanCascades {
         textureEntry(1, C, 'unfilterable-float'),
         storageTextureEntry(2, OCEAN_OUTPUT_FORMAT),
         storageTextureEntry(3, OCEAN_OUTPUT_FORMAT),
+        textureEntry(4, C, 'unfilterable-float'),
+        storageTextureEntry(5, OCEAN_OUTPUT_FORMAT),
       ],
     });
     const mipLayout = device.createBindGroupLayout({
@@ -185,7 +226,11 @@ export class OceanCascades {
     });
     const statsLayout = device.createBindGroupLayout({
       label: 'ocean-stats',
-      entries: [textureEntry(0, C, 'unfilterable-float'), storageBufferEntry(1, C)],
+      entries: [
+        textureEntry(0, C, 'unfilterable-float'),
+        storageBufferEntry(1, C),
+        textureEntry(2, C, 'unfilterable-float'),
+      ],
     });
     const pipeline = (
       label: string,
@@ -215,30 +260,10 @@ export class OceanCascades {
           ? { dimension: '2d-array' }
           : { dimension: '2d-array', baseMipLevel: mip, mipLevelCount: 1 },
       );
-
-    const evolveBindGroup = device.createBindGroup({
-      label: 'ocean-evolve',
-      layout: evolveLayout,
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: arrayView(spectrum.h0) },
-        { binding: 2, resource: arrayView(fields) },
-      ],
-    });
-    const assembleBindGroup = device.createBindGroup({
-      label: 'ocean-assemble',
-      layout: assembleLayout,
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: arrayView(fields) },
-        { binding: 2, resource: arrayView(displacement, 0) },
-        { binding: 3, resource: arrayView(derivatives, 0) },
-      ],
-    });
-    const mipBindGroups: GPUBindGroup[] = [];
-    for (const texture of [displacement, derivatives]) {
+    const mipChain = (texture: GPUTexture): GPUBindGroup[] => {
+      const groups: GPUBindGroup[] = [];
       for (let mip = 1; mip < mipLevelCount; mip++) {
-        mipBindGroups.push(
+        groups.push(
           device.createBindGroup({
             label: `${texture.label}-mip${mip}`,
             layout: mipLayout,
@@ -249,15 +274,43 @@ export class OceanCascades {
           }),
         );
       }
-    }
-    const statsBindGroup = device.createBindGroup({
-      label: 'ocean-stats',
-      layout: statsLayout,
+      return groups;
+    };
+
+    const evolveBindGroup = device.createBindGroup({
+      label: 'ocean-evolve',
+      layout: evolveLayout,
       entries: [
-        { binding: 0, resource: arrayView(fields) },
-        { binding: 1, resource: { buffer: statsBuffer } },
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: arrayView(spectrum.h0) },
+        { binding: 2, resource: arrayView(fields) },
       ],
     });
+    const assembleBindGroups = [0, 1].map((written) =>
+      device.createBindGroup({
+        label: `ocean-assemble-${written}`,
+        layout: assembleLayout,
+        entries: [
+          { binding: 0, resource: { buffer: uniformBuffer } },
+          { binding: 1, resource: arrayView(fields) },
+          { binding: 2, resource: arrayView(displacement, 0) },
+          { binding: 3, resource: arrayView(derivatives, 0) },
+          { binding: 4, resource: arrayView(foam[1 - written] as GPUTexture, 0) },
+          { binding: 5, resource: arrayView(foam[written] as GPUTexture, 0) },
+        ],
+      }),
+    );
+    const statsBindGroups = [0, 1].map((current) =>
+      device.createBindGroup({
+        label: `ocean-stats-${current}`,
+        layout: statsLayout,
+        entries: [
+          { binding: 0, resource: arrayView(fields) },
+          { binding: 1, resource: { buffer: statsBuffer } },
+          { binding: 2, resource: arrayView(foam[current] as GPUTexture, 0) },
+        ],
+      }),
+    );
 
     return new OceanCascades(
       device,
@@ -266,12 +319,13 @@ export class OceanCascades {
       spectrum,
       fft,
       {
-        evolve: { pipeline: evolvePipeline, bindGroup: evolveBindGroup },
-        assemble: { pipeline: assemblePipeline, bindGroup: assembleBindGroup },
-        mips: { pipeline: mipPipeline, bindGroups: mipBindGroups },
-        stats: { pipeline: statsPipeline, bindGroup: statsBindGroup },
+        evolve: { pipeline: evolvePipeline, bindGroups: [evolveBindGroup] },
+        assemble: { pipeline: assemblePipeline, bindGroups: assembleBindGroups },
+        mips: { pipeline: mipPipeline, bindGroups: [...mipChain(displacement), ...mipChain(derivatives)] },
+        foamMips: foam.map(mipChain),
+        stats: { pipeline: statsPipeline, bindGroups: statsBindGroups },
       },
-      { uniformBuffer, fields, scratch, displacement, derivatives, statsBuffer },
+      { uniformBuffer, fields, scratch, displacement, derivatives, foam, statsBuffer },
     );
   }
 
@@ -279,9 +333,24 @@ export class OceanCascades {
     return this.bands.length;
   }
 
+  /** Initial spectrum h0 (xy: h0(k), zw: conj h0(-k)) per cascade layer. */
+  get spectrumTexture(): GPUTexture {
+    return this.spectrum.h0;
+  }
+
+  /** Foam texture written by the latest {@link OceanCascades.encode} (0 or 1). */
+  get currentFoamIndex(): number {
+    return this.foamIndex;
+  }
+
   /** Significant wave height measured from the GPU height fields (null until the first readback). */
   get measuredSignificantWaveHeight(): number | null {
     return this.measuredHs;
+  }
+
+  /** Fraction of the sea surface covered by foam, measured on the GPU (null until available). */
+  get measuredWhitecapCoverage(): number | null {
+    return this.measuredFoamCoverage;
   }
 
   /** Updates the sea state; the initial spectrum is only regenerated when it changed. */
@@ -293,22 +362,37 @@ export class OceanCascades {
       this.spectrumDirty = true;
     }
     const d = this.uniformData;
-    d[U_JONSWAP] = p.calm ? 0 : p.alpha;
-    d[U_JONSWAP + 1] = p.calm ? 1 : p.peakOmega;
-    d[U_JONSWAP + 2] = p.gamma;
-    d[U_WIND] = state.propagation[0];
-    d[U_WIND + 1] = state.propagation[1];
-    d[U_WIND + 2] = state.choppiness;
+    d[U.jonswap] = p.calm ? 0 : p.alpha;
+    d[U.jonswap + 1] = p.calm ? 1 : p.peakOmega;
+    d[U.jonswap + 2] = p.gamma;
+    d[U.wind] = state.propagation[0];
+    d[U.wind + 1] = state.propagation[1];
+    d[U.wind + 2] = state.choppiness;
+  }
+
+  setFoam(foam: FoamParameters): void {
+    const d = this.uniformData;
+    d[U.foam + 1] = foam.decayTimeS;
+    for (let c = 0; c < FOAM_CASCADE_COUNT; c++) {
+      d[U.foamCascades + 2 * c] = foam.jacobianThresholds[c] ?? NO_FOAM_THRESHOLD;
+      d[U.foamCascades + 2 * c + 1] = foam.softness[c] ?? 1;
+    }
   }
 
   /**
-   * Records the simulation for `timePhase` = (t mod T) / T into a compute pass.
+   * Records the simulation for time `timeSeconds` into a compute pass.
    * Call {@link OceanCascades.afterSubmit} after the command buffer is submitted.
    */
-  encode(encoder: GPUCommandEncoder, timePhase: number, timestampWrites?: GPUComputePassTimestampWrites): void {
-    this.uniformData[U_GRID + 3] = timePhase;
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
+  encode(encoder: GPUCommandEncoder, timeSeconds: number, timestampWrites?: GPUComputePassTimestampWrites): void {
+    const d = this.uniformData;
+    d[U.grid + 3] = (((timeSeconds % OCEAN_TIME_LOOP_S) + OCEAN_TIME_LOOP_S) % OCEAN_TIME_LOOP_S) / OCEAN_TIME_LOOP_S;
+    // Foam ages with simulation time only (frozen while paused).
+    const step = this.lastTime === null ? 0 : timeSeconds - this.lastTime;
+    d[U.foam] = Math.min(Math.max(step, 0), MAX_FOAM_STEP_S);
+    this.lastTime = timeSeconds;
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, d);
 
+    const written = 1 - this.foamIndex;
     const groups = Math.ceil(this.size / TEXEL_WORKGROUP);
     const cascades = this.cascadeCount;
     const pass = encoder.beginComputePass(
@@ -318,30 +402,33 @@ export class OceanCascades {
       this.spectrum.encode(pass);
       this.spectrumDirty = false;
     }
-    pass.setPipeline(this.passes.evolve.pipeline);
-    pass.setBindGroup(0, this.passes.evolve.bindGroup);
+    pass.setPipeline(this.stages.evolve.pipeline);
+    pass.setBindGroup(0, this.stages.evolve.bindGroups[0] as GPUBindGroup);
     pass.dispatchWorkgroups(groups, groups, cascades);
 
     this.fft.encode(pass);
 
-    pass.setPipeline(this.passes.assemble.pipeline);
-    pass.setBindGroup(0, this.passes.assemble.bindGroup);
+    pass.setPipeline(this.stages.assemble.pipeline);
+    pass.setBindGroup(0, this.stages.assemble.bindGroups[written] as GPUBindGroup);
     pass.dispatchWorkgroups(groups, groups, cascades);
 
-    pass.setPipeline(this.passes.mips.pipeline);
+    pass.setPipeline(this.stages.mips.pipeline);
+    const chains = [this.stages.mips.bindGroups, this.stages.foamMips[written] as readonly GPUBindGroup[]];
     const mipsPerTexture = this.mipLevelCount - 1;
-    this.passes.mips.bindGroups.forEach((bindGroup, i) => {
-      const mip = (i % mipsPerTexture) + 1;
-      const mipGroups = Math.ceil((this.size >> mip) / TEXEL_WORKGROUP);
-      pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(mipGroups, mipGroups, cascades);
-    });
+    for (const chain of chains) {
+      chain.forEach((bindGroup, i) => {
+        const mip = (i % mipsPerTexture) + 1;
+        const mipGroups = Math.ceil((this.size >> mip) / TEXEL_WORKGROUP);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(mipGroups, mipGroups, cascades);
+      });
+    }
 
     const measure = this.frameCounter++ % STATS_INTERVAL_FRAMES === 0;
     const staging = measure ? this.statsRing.acquire() : null;
     if (staging) {
-      pass.setPipeline(this.passes.stats.pipeline);
-      pass.setBindGroup(0, this.passes.stats.bindGroup);
+      pass.setPipeline(this.stages.stats.pipeline);
+      pass.setBindGroup(0, this.stages.stats.bindGroups[written] as GPUBindGroup);
       pass.dispatchWorkgroups(this.size, cascades);
     }
     pass.end();
@@ -349,6 +436,7 @@ export class OceanCascades {
       encoder.copyBufferToBuffer(this.statsBuffer, 0, staging, 0, this.statsBuffer.size);
     }
     this.statsPending = staging;
+    this.foamIndex = written;
   }
 
   afterSubmit(): void {
@@ -358,21 +446,33 @@ export class OceanCascades {
       return;
     }
     const texels = this.size * this.size;
+    const cascades = this.cascadeCount;
     this.statsRing.mapWhenReady(staging, (data) => {
-      const rowSums = new Float32Array(data);
+      const values = new Float32Array(data);
+      const half = values.length / 2;
       let variance = 0;
-      for (const sum of rowSums) {
-        variance += sum;
+      for (let i = 0; i < half; i++) {
+        variance += values[i] as number;
       }
       // Bands are disjoint and independent, so their variances add up.
       this.measuredHs = 4 * Math.sqrt(variance / texels);
+      // Foam layers are independent patterns: the uncovered fractions multiply.
+      let uncovered = 1;
+      for (let c = 0; c < Math.min(cascades, FOAM_CASCADE_COUNT); c++) {
+        let count = 0;
+        for (let row = 0; row < this.size; row++) {
+          count += values[half + c * this.size + row] as number;
+        }
+        uncovered *= 1 - count / texels;
+      }
+      this.measuredFoamCoverage = 1 - uncovered;
     });
   }
 
   dispose(): void {
     this.statsRing.dispose();
     this.spectrum.dispose();
-    for (const texture of [this.fields, this.scratch, this.displacement, this.derivatives]) {
+    for (const texture of [this.fields, this.scratch, this.displacement, this.derivatives, ...this.foam]) {
       texture.destroy();
     }
     this.uniformBuffer.destroy();

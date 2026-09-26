@@ -7,6 +7,7 @@ import {
   FRAME_UNIFORM_OFFSETS,
 } from '../src/render/frameUniforms';
 import { computeStructLayout } from './helpers/wgslLayout';
+import { TONEMAP_UNIFORM_BYTES } from '../src/render/tonemapPass';
 
 describe('FrameUniforms layout', () => {
   const layout = computeStructLayout(frameWgsl, 'FrameUniforms');
@@ -25,9 +26,9 @@ describe('FrameUniforms layout', () => {
 });
 
 describe('TonemapUniforms layout', () => {
-  it('is four consecutive 32-bit words, as written by TonemapPass', () => {
+  it('matches the words written by TonemapPass', () => {
     const layout = computeStructLayout(tonemapWgsl, 'TonemapUniforms');
-    expect(layout.offsets).toEqual({ exposure: 0, operatorId: 4, ditherLsb: 8, frameIndex: 12 });
-    expect(layout.size).toBe(16);
+    expect(layout.offsets).toEqual({ exposure: 0, operatorId: 4, ditherLsb: 8, frameIndex: 12, autoExposure: 16 });
+    expect(layout.size).toBe(TONEMAP_UNIFORM_BYTES);
   });
 });

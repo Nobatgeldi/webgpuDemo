@@ -1,22 +1,28 @@
-// Phase-0 analytic sky gradient (replaced by the physical atmosphere in phase 2).
-// Requires frame.wgsl and common.wgsl.
+// Sky lookups for scene shaders: radiance from the sky-view LUT, the sun disk
+// and the diffuse sky irradiance.
+// Requires frame.wgsl, common.wgsl, the atmosphere constants and atmosphereCommon.wgsl.
 
-// Shapes the zenith/horizon blend: < 1 keeps the horizon band narrow and bright.
-const SKY_GRADIENT_EXPONENT: f32 = 0.45;
-// Angular width (as sin(elevation)) of the soft transition below the horizon.
-const HORIZON_BLEND_WIDTH: f32 = 0.02;
 // Linear limb-darkening coefficient of the solar disk.
 const SUN_LIMB_DARKENING: f32 = 0.6;
 
-// Sky radiance without the solar disk; used for the sky itself, fog and reflections.
+// Sky radiance along `dir` without the solar disk (sky, fog and reflections).
 fn skyRadiance(dir: vec3<f32>) -> vec3<f32> {
-  let up = dir.y;
-  let t = pow(saturate(up), SKY_GRADIENT_EXPONENT);
-  var color = mix(frame.skyHorizon.rgb, frame.skyZenith.rgb, t);
-  let cosSun = dot(dir, frame.sunDirection.xyz);
-  color += frame.sunHalo.rgb * henyeyGreenstein(cosSun, frame.sunHalo.w);
-  let below = smoothstep(0.0, -HORIZON_BLEND_WIDTH, up);
-  return mix(color, frame.skyBelowHorizon.rgb, below);
+  let sunHorizontal = frame.sunDirection.xz;
+  let dirHorizontal = dir.xz;
+  let sunLength = length(sunHorizontal);
+  let dirLength = length(dirHorizontal);
+  var cosAzimuth = 1.0;
+  if (sunLength > 1e-5 && dirLength > 1e-5) {
+    cosAzimuth = dot(dirHorizontal / dirLength, sunHorizontal / sunLength);
+  }
+  let azimuth = acos(clamp(cosAzimuth, -1.0, 1.0));
+  let elevation = asin(clamp(dir.y, -1.0, 1.0));
+  return textureSampleLevel(skyViewLut, atmosphereSampler, skyViewUv(elevation, azimuth), 0.0).rgb;
+}
+
+// Diffuse irradiance from the whole sky on a horizontal surface.
+fn skyIrradiance() -> vec3<f32> {
+  return skyLight.irradiance.rgb;
 }
 
 // Radiance of the solar disk along `dir` (zero outside the disk), anti-aliased at the rim.

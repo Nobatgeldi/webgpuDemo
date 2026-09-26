@@ -3,6 +3,11 @@ import { BEAUFORT_TABLE, beaufortMidSpeed } from '../src/ocean/beaufort';
 import {
   CALM_WIND_SPEED_MS,
   backwardSuppression,
+  coxMunkSlopeVariance,
+  inverseNormalCdf,
+  resolvedSlopeVariance,
+  unresolvedSlopeVariance,
+  whitecapCoverage,
   donelanBannerSpreading,
   jonswapEnhancement,
   jonswapParameters,
@@ -121,5 +126,53 @@ describe('Directional spreading', () => {
     const ratio = (sum * dk * dk) / spectralMoment0(p);
     expect(ratio).toBeGreaterThan(0.88);
     expect(ratio).toBeLessThan(1.01);
+  });
+});
+
+describe('surface slopes and whitecaps', () => {
+  it('uses the Cox-Munk mean-square slope', () => {
+    expect(coxMunkSlopeVariance(0)).toBeCloseTo(0.003, 9);
+    expect(coxMunkSlopeVariance(10)).toBeCloseTo(0.0542, 9);
+  });
+
+  it('resolves more slope variance with a higher cutoff wavenumber', () => {
+    const p = jonswapParameters({ windSpeedMs: 10, fetchM: DEFAULT_FETCH_M });
+    let previous = 0;
+    for (const k of [0.05, 0.5, 5, 50]) {
+      const v = resolvedSlopeVariance(p, k);
+      expect(v).toBeGreaterThanOrEqual(previous);
+      previous = v;
+    }
+    // The long waves alone are much smoother than the measured total.
+    expect(resolvedSlopeVariance(p, 0.5)).toBeLessThan(coxMunkSlopeVariance(10));
+  });
+
+  it('reports the unresolved variance as non-negative and decreasing', () => {
+    const p = jonswapParameters({ windSpeedMs: 15, fetchM: DEFAULT_FETCH_M });
+    let previous = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 16; i++) {
+      const k = 0.01 * 10 ** (i / 3);
+      const v = unresolvedSlopeVariance(p, k, 30);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(previous + 1e-12);
+      previous = v;
+    }
+    const calm = jonswapParameters({ windSpeedMs: 0, fetchM: DEFAULT_FETCH_M });
+    expect(unresolvedSlopeVariance(calm, 1, 30)).toBeCloseTo(0.003, 9);
+  });
+
+  it('follows Monahan whitecap coverage (none below Bf 3, several % at Bf 8)', () => {
+    expect(whitecapCoverage(3)).toBeLessThan(0.0003);
+    expect(whitecapCoverage(beaufortMidSpeed(8))).toBeGreaterThan(0.05);
+    expect(whitecapCoverage(100)).toBe(1);
+  });
+});
+
+describe('inverseNormalCdf', () => {
+  it('inverts known quantiles', () => {
+    expect(inverseNormalCdf(0.5)).toBeCloseTo(0, 9);
+    expect(inverseNormalCdf(0.975)).toBeCloseTo(1.959964, 5);
+    expect(inverseNormalCdf(0.001)).toBeCloseTo(-3.090232, 5);
+    expect(inverseNormalCdf(0)).toBe(Number.NEGATIVE_INFINITY);
   });
 });

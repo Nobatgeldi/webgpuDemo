@@ -4,7 +4,7 @@ import { composeWgsl, createShaderModule } from '../core/shader';
 import type { Camera } from '../render/camera';
 import type { FrameUniforms } from '../render/frameUniforms';
 import { DEPTH_COMPARE_CLOSER, DEPTH_FORMAT, HDR_FORMAT } from '../render/renderConfig';
-import { WGSL } from '../shaders';
+import { SCENE_PRELUDE, WGSL } from '../shaders';
 import type { OceanCascades } from './cascades';
 import { MAX_CASCADES, OCEAN_SKIRT_DISTANCE_M, type OceanQualityConfig } from './oceanConfig';
 import {
@@ -16,9 +16,20 @@ import {
 } from './oceanMesh';
 
 /** Float offsets of OceanRenderUniforms and OceanLevel (shaders/ocean.wgsl); verified by tests. */
-export const OCEAN_RENDER_UNIFORM_OFFSETS = { patchSizes: 0, lod: 4, mesh: 8, water: 12 } as const;
+export const OCEAN_RENDER_UNIFORM_OFFSETS = {
+  patchSizes: 0,
+  lod: 4,
+  mesh: 8,
+  water: 12,
+  roughness: 16,
+  slopeVariance: 20,
+} as const;
 export const OCEAN_LEVEL_OFFSETS = { centre: 0, origin01: 4, origin2: 8 } as const;
-export const RENDER_UNIFORM_BYTES = 64;
+export const RENDER_UNIFORM_BYTES = 144;
+/** Entries of the unresolved slope variance table (four vec4). */
+export const SLOPE_TABLE_SIZE = 16;
+/** Smallest GGX width of the sun glint (numerical floor; Cox-Munk covers the physics). */
+const MIN_GLINT_ALPHA = 0.02;
 /** Floats per OceanLevel entry (three vec4). */
 export const LEVEL_FLOATS = 12;
 
@@ -37,15 +48,30 @@ const OCEAN_FOG_DISTANCE_M = 25_000;
 /** Anisotropic filtering of the wave textures at grazing angles. */
 const OCEAN_MAX_ANISOTROPY = 8;
 
+export interface OceanRenderParameters {
+  readonly wireframe: boolean;
+  readonly significantWaveHeightM: number;
+  /** ln of the first cutoff wavenumber of the slope table and the ln step between entries. */
+  readonly slopeTableLogK0: number;
+  readonly slopeTableLogStep: number;
+  /** Unresolved mean-square slope per table entry ({@link SLOPE_TABLE_SIZE} values). */
+  readonly slopeVariance: ArrayLike<number>;
+}
+
 /** Draws the clipmap levels of the sea surface. */
 export class OceanRenderer {
   private readonly levelData: Float32Array;
   private readonly levelRanges: IndexRange[] = [];
+  private readonly uniformData: Float32Array;
 
   private constructor(
     private readonly device: GPUDevice,
     private readonly pipeline: GPURenderPipeline,
-    private readonly bindGroup: GPUBindGroup,
+    /** One bind group per foam ping-pong texture. */
+    private readonly bindGroups: readonly GPUBindGroup[],
+    private readonly uniformBuffer: GPUBuffer,
+    uniformData: Float32Array,
+    private readonly cascades: OceanCascades,
     private readonly vertexBuffer: GPUBuffer,
     private readonly indexBuffer: GPUBuffer,
     private readonly levelBuffer: GPUBuffer,
@@ -54,6 +80,7 @@ export class OceanRenderer {
     private readonly patchSizes: readonly number[],
   ) {
     this.levelData = new Float32Array(config.meshLevels * LEVEL_FLOATS);
+    this.uniformData = uniformData;
   }
 
   static async create(
@@ -97,6 +124,8 @@ export class OceanRenderer {
     uniforms[u.mesh + 1] = config.meshLevels - 1;
     uniforms.set(WATER_SCATTER_ALBEDO, u.water);
     uniforms[u.water + 3] = OCEAN_FOG_DISTANCE_M;
+    uniforms[u.roughness + 2] = SLOPE_TABLE_SIZE;
+    uniforms[u.roughness + 3] = MIN_GLINT_ALPHA;
     const uniformBuffer = device.createBuffer({
       label: 'ocean-render-uniforms',
       size: RENDER_UNIFORM_BYTES,
@@ -113,6 +142,7 @@ export class OceanRenderer {
         textureEntry(2, VF, 'float'),
         textureEntry(3, VF, 'float'),
         samplerEntry(4, VF),
+        textureEntry(5, VF, 'float'),
       ],
     });
     const sampler = device.createSampler({
@@ -124,21 +154,24 @@ export class OceanRenderer {
       mipmapFilter: 'linear',
       maxAnisotropy: OCEAN_MAX_ANISOTROPY,
     });
-    const bindGroup = device.createBindGroup({
-      label: 'ocean-render',
-      layout,
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: levelBuffer } },
-        { binding: 2, resource: cascades.displacement.createView({ dimension: '2d-array' }) },
-        { binding: 3, resource: cascades.derivatives.createView({ dimension: '2d-array' }) },
-        { binding: 4, resource: sampler },
-      ],
-    });
+    const bindGroups = cascades.foam.map((foam, i) =>
+      device.createBindGroup({
+        label: `ocean-render-${i}`,
+        layout,
+        entries: [
+          { binding: 0, resource: { buffer: uniformBuffer } },
+          { binding: 1, resource: { buffer: levelBuffer } },
+          { binding: 2, resource: cascades.displacement.createView({ dimension: '2d-array' }) },
+          { binding: 3, resource: cascades.derivatives.createView({ dimension: '2d-array' }) },
+          { binding: 4, resource: sampler },
+          { binding: 5, resource: foam.createView({ dimension: '2d-array' }) },
+        ],
+      }),
+    );
 
     const module = await createShaderModule(
       device,
-      composeWgsl('ocean', [WGSL.frame, WGSL.common, WGSL.skyCommon, WGSL.ocean]),
+      composeWgsl('ocean', [...SCENE_PRELUDE, WGSL.ocean]),
     );
     const pipeline = await device.createRenderPipelineAsync({
       label: 'ocean',
@@ -168,7 +201,10 @@ export class OceanRenderer {
     return new OceanRenderer(
       device,
       pipeline,
-      bindGroup,
+      bindGroups,
+      uniformBuffer,
+      uniforms,
+      cascades,
       vertexBuffer,
       indexBuffer,
       levelBuffer,
@@ -179,7 +215,18 @@ export class OceanRenderer {
   }
 
   /** Places the levels around the camera. Call once per frame before {@link OceanRenderer.draw}. */
-  update(camera: Camera): void {
+  update(camera: Camera, params: OceanRenderParameters): void {
+    const u = OCEAN_RENDER_UNIFORM_OFFSETS;
+    const uniforms = this.uniformData;
+    uniforms[u.mesh + 2] = params.wireframe ? 1 : 0;
+    uniforms[u.mesh + 3] = params.significantWaveHeightM;
+    uniforms[u.roughness] = params.slopeTableLogK0;
+    uniforms[u.roughness + 1] = params.slopeTableLogStep;
+    for (let i = 0; i < SLOPE_TABLE_SIZE; i++) {
+      uniforms[u.slopeVariance + i] = params.slopeVariance[i] ?? 0;
+    }
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
+
     const cameraX = camera.position[0] as number;
     const cameraZ = camera.position[2] as number;
     const layouts = computeLevelLayouts(
@@ -215,7 +262,7 @@ export class OceanRenderer {
   /** Records the draws; bind group 0 (frame uniforms) must already be set. */
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
-    pass.setBindGroup(1, this.bindGroup);
+    pass.setBindGroup(1, this.bindGroups[this.cascades.currentFoamIndex] as GPUBindGroup);
     pass.setVertexBuffer(0, this.vertexBuffer);
     pass.setIndexBuffer(this.indexBuffer, 'uint32');
     this.levelRanges.forEach((range, level) => {

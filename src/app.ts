@@ -17,8 +17,10 @@ import { DEPTH_CLEAR_VALUE, MAX_TIMED_PASSES } from './render/renderConfig';
 import { RenderTargets } from './render/renderTargets';
 import { TonemapPass } from './render/tonemapPass';
 import { createDefaultSettings, roundWindSpeed, type AppSettings } from './settings';
-import { computeSkyState, type SkyState } from './sky/skyModel';
+import { Atmosphere } from './sky/atmosphere';
+import { computeSunState, overcastFromWind, type SunState } from './sky/atmosphereModel';
 import { SkyPass } from './sky/skyPass';
+import { DebugTextureView } from './render/debugTextureView';
 import { DebugOverlay, type DebugSection } from './ui/debugOverlay';
 import { Hud } from './ui/hud';
 import { ControlPanel } from './ui/panel';
@@ -69,6 +71,8 @@ export interface AppOptions {
 }
 
 interface AppPasses {
+  readonly atmosphere: Atmosphere;
+  readonly debugTextureView: DebugTextureView;
   readonly frameUniforms: FrameUniforms;
   readonly skyPass: SkyPass;
   readonly gridPass: GridPass;
@@ -97,8 +101,8 @@ export class App {
   private readonly cpuFrameMs = new ExponentialAverage(CPU_TIME_SMOOTHING_FRAMES);
   private readonly wind: WindState;
 
-  private sky: SkyState;
-  private skyKey = '';
+  private sun: SunState;
+  private sunKey = '';
   private lastFrame: FrameInfo | null = null;
 
   private readonly gpu: GpuContext;
@@ -109,6 +113,8 @@ export class App {
   private readonly gridPass: GridPass;
   private readonly tonemapPass: TonemapPass;
   private readonly ocean: Ocean;
+  private readonly atmosphere: Atmosphere;
+  private readonly debugTextureView: DebugTextureView;
 
   private constructor(options: AppOptions, passes: AppPasses) {
     const { gpu, elements, launch } = options;
@@ -121,6 +127,8 @@ export class App {
     this.gridPass = passes.gridPass;
     this.tonemapPass = passes.tonemapPass;
     this.ocean = passes.ocean;
+    this.atmosphere = passes.atmosphere;
+    this.debugTextureView = passes.debugTextureView;
     this.settings = createDefaultSettings();
     this.settings.paused = launch.paused;
     if (launch.beaufort !== null) {
@@ -141,7 +149,7 @@ export class App {
     );
     this.targets = new RenderTargets(device);
     this.timer = new GpuTimer(device, gpu.features.timestampQuery, MAX_TIMED_PASSES);
-    this.sky = computeSkyState(this.settings.sunElevationDeg, this.settings.sunAzimuthDeg);
+    this.sun = computeSunState(this.settings.sunElevationDeg, this.settings.sunAzimuthDeg, 0);
 
     this.panel = new ControlPanel(this.settings, {
       onPixelRatioCapChange: (cap) => this.sizer.setPixelRatioCap(cap),
@@ -162,16 +170,34 @@ export class App {
 
   static async create(options: AppOptions): Promise<App> {
     const { device, canvasFormat } = options.gpu;
-    const frameUniforms = new FrameUniforms(device);
+    const atmosphere = await Atmosphere.create(device);
+    const frameUniforms = new FrameUniforms(device, atmosphere);
     const { quality, seed } = options.launch;
     // Pipelines compile in parallel.
     const [skyPass, gridPass, tonemapPass, ocean] = await Promise.all([
       SkyPass.create(device, frameUniforms),
       GridPass.create(device, frameUniforms),
-      TonemapPass.create(device, canvasFormat),
+      TonemapPass.create(device, canvasFormat, atmosphere.skyLightBuffer),
       Ocean.create(device, frameUniforms, quality, seed),
     ]);
-    return new App(options, { frameUniforms, skyPass, gridPass, tonemapPass, ocean });
+    const oceanTextures = ocean.debugTextures;
+    const debugTextureView = await DebugTextureView.create(device, canvasFormat, {
+      spectrum: oceanTextures.spectrum,
+      displacement: oceanTextures.displacement,
+      derivatives: oceanTextures.derivatives,
+      foam: oceanTextures.foam,
+      skyView: atmosphere.skyViewLut,
+      transmittance: atmosphere.transmittanceLut,
+    });
+    return new App(options, {
+      atmosphere,
+      debugTextureView,
+      frameUniforms,
+      skyPass,
+      gridPass,
+      tonemapPass,
+      ocean,
+    });
   }
 
   start(): void {
@@ -240,10 +266,10 @@ export class App {
 
     this.camera.aspect = width / height;
     this.camera.updateMatrices();
-    this.updateSky();
+    this.updateSun();
     this.frameUniforms.update({
       camera: this.camera,
-      sky: this.sky,
+      sun: this.sun,
       viewportWidth: width,
       viewportHeight: height,
       simTimeSeconds: this.clock.time,
@@ -254,11 +280,12 @@ export class App {
 
     this.timer.beginFrame();
     const encoder = device.createCommandEncoder({ label: 'frame' });
+    this.atmosphere.encode(encoder);
 
     // Waves at the render instant: interpolated between the last two simulation steps.
     const renderTime = this.clock.time + (this.settings.paused ? 0 : frame.alpha * this.clock.stepSeconds);
     this.ocean.encodeSimulation(encoder, renderTime, this.timer.timestampWrites('ocean-sim'));
-    this.ocean.prepareDraw(this.camera);
+    this.ocean.prepareDraw(this.camera, { wireframe: this.settings.oceanWireframe });
 
     const scenePass = encoder.beginRenderPass({
       label: 'scene',
@@ -282,12 +309,16 @@ export class App {
     this.skyPass.draw(scenePass);
     scenePass.end();
 
-    this.tonemapPass.encode(
-      encoder,
-      this.targets.hdrView,
-      canvasContext.getCurrentTexture().createView({ label: 'swapchain' }),
-      this.timer.timestampWrites('tonemap'),
-    );
+    const swapchainView = canvasContext.getCurrentTexture().createView({ label: 'swapchain' });
+    this.tonemapPass.encode(encoder, this.targets.hdrView, swapchainView, this.timer.timestampWrites('tonemap'));
+    this.debugTextureView.encode(encoder, swapchainView, {
+      name: this.settings.debugTexture,
+      cascade: Math.min(this.settings.debugTextureCascade, this.ocean.quality.cascadeCount - 1),
+      currentFoamIndex: this.ocean.debugTextures.currentFoamIndex,
+      significantWaveHeightM: this.ocean.significantWaveHeightM,
+      viewportWidth: width,
+      viewportHeight: height,
+    });
 
     this.timer.resolve(encoder);
     device.queue.submit([encoder.finish()]);
@@ -295,13 +326,15 @@ export class App {
     this.ocean.afterSubmit();
   }
 
-  /** Recomputes the sky only when the sun moved. */
-  private updateSky(): void {
-    const key = `${this.settings.sunElevationDeg}|${this.settings.sunAzimuthDeg}`;
-    if (key !== this.skyKey) {
-      this.sky = computeSkyState(this.settings.sunElevationDeg, this.settings.sunAzimuthDeg);
-      this.skyKey = key;
+  /** Recomputes the sun (and the sky LUTs) only when the sun or the cloud cover changed. */
+  private updateSun(): void {
+    const overcast = overcastFromWind(this.wind.speedMs, this.settings.stormClouds);
+    const key = `${this.settings.sunElevationDeg}|${this.settings.sunAzimuthDeg}|${overcast}`;
+    if (key !== this.sunKey) {
+      this.sun = computeSunState(this.settings.sunElevationDeg, this.settings.sunAzimuthDeg, overcast);
+      this.sunKey = key;
     }
+    this.atmosphere.setSun(this.sun);
   }
 
   private updateUi(frame: FrameInfo): void {
@@ -354,6 +387,9 @@ export class App {
             `F_eff=${(p.effectiveFetchM / METRES_PER_KM).toFixed(0)} km`,
         `Hs model ${stats.significantWaveHeightM.toFixed(2)} m, resolved ${stats.resolvedSignificantWaveHeightM.toFixed(2)} m, ` +
           `GPU ${measured === null ? '–' : `${measured.toFixed(2)} m`}`,
+        `whitecaps: GPU ${stats.measuredWhitecapCoverage === null ? '–' : `${(stats.measuredWhitecapCoverage * 100).toFixed(2)} %`}, ` +
+          `Monahan ${(stats.monahanWhitecapCoverage * 100).toFixed(2)} %`,
+        `sun irradiance ${this.sun.irradiance.map((e) => e.toFixed(3)).join('/')}, overcast ${this.sun.overcast.toFixed(2)}`,
       ],
     };
   }

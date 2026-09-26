@@ -1,13 +1,37 @@
-// Sea surface: camera-centred clipmap levels displaced by the FFT cascades,
-// with basic water shading (Fresnel, sky reflection, GGX sun glint, body
-// scattering, distance fog). Phase 2 extends the shading.
-// Requires frame.wgsl, common.wgsl, skyCommon.wgsl.
+// Sea surface: camera-centred clipmap levels displaced by the FFT cascades.
+// Shading: Schlick Fresnel between sky reflection and light scattered out of
+// the water body, GGX sun glint whose roughness accounts for the slopes the
+// filtered textures cannot resolve at the pixel footprint (anti-aliasing),
+// subsurface light through wave crests, foam and atmospheric haze.
+// Requires the scene prelude (shaders/index.ts).
 
 const OCEAN_MAX_CASCADES: u32 = 3u;
+const FOAM_CASCADES: u32 = 2u;
 // Normal-incidence reflectance of water (n = 1.33).
 const WATER_F0: f32 = 0.02;
-// GGX roughness of the sun glint.
-const WATER_SUN_ROUGHNESS: f32 = 0.08;
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+// Subsurface scattering through thin wave crests (colour of light transmitted
+// through ~1 m of sea water, relative strength and view-to-sun focus).
+const SSS_COLOR: vec3<f32> = vec3<f32>(0.1, 0.5, 0.45);
+const SSS_STRENGTH: f32 = 0.03;
+const SSS_FOCUS_POWER: f32 = 4.0;
+// Crest height (as a fraction of Hs) at which subsurface light is fully visible.
+const SSS_CREST_FRACTION_OF_HS: f32 = 0.5;
+// Diffuse albedo of foam (bubbles scatter almost all light).
+const FOAM_ALBEDO: f32 = 0.75;
+// Foam amount mapped to coverage: soft onset, full at 1.
+const FOAM_COVERAGE_START: f32 = 0.15;
+// Foam gathers where the smallest waves converge (compressed surface), which
+// breaks the texel-sized foam patches of the long cascades into filaments:
+// amount *= BASE + GAIN * saturate(0.5 - SCALE * (dDx/dx + dDz/dz) of the finest cascade).
+const FOAM_DETAIL_BASE: f32 = 0.4;
+const FOAM_DETAIL_GAIN: f32 = 1.2;
+const FOAM_DETAIL_SCALE: f32 = 3.0;
+// Specular reflection that survives under full foam cover.
+const FOAM_SPECULAR_SCALE: f32 = 0.2;
+// Haze gets denser under an overcast storm sky (spray, drizzle).
+const OVERCAST_FOG_REDUCTION: f32 = 0.6;
+const WIREFRAME_LINE_PX: f32 = 1.0;
 // Lower bound of the surface stretch (1 + dD/dx) when deriving normals, avoids
 // singular normals where choppy waves fold over.
 const MIN_SURFACE_STRETCH: f32 = 0.1;
@@ -17,10 +41,14 @@ struct OceanRenderUniforms {
   patchSizes: vec4<f32>,
   // x: FFT size, y: highest mip level, z: morph start, w: morph end (fractions of the level half-size)
   lod: vec4<f32>,
-  // x: half cells per level M, y: index of the outermost level
+  // x: half cells per level M, y: index of the outermost level, z: wireframe (0/1), w: Hs (m)
   mesh: vec4<f32>,
   // rgb: water body scattering albedo, w: fog distance (m)
   water: vec4<f32>,
+  // x: ln(first table wavenumber), y: ln step, z: entries, w: minimum GGX alpha
+  roughness: vec4<f32>,
+  // Unresolved mean-square slope for cutoff wavenumbers k_i = exp(roughness.x + i * roughness.y).
+  slopeVariance: array<vec4<f32>, 4>,
 }
 
 struct OceanLevel {
@@ -37,6 +65,7 @@ struct OceanLevel {
 @group(1) @binding(2) var displacementTexture: texture_2d_array<f32>;
 @group(1) @binding(3) var derivativesTexture: texture_2d_array<f32>;
 @group(1) @binding(4) var oceanSampler: sampler;
+@group(1) @binding(5) var foamTexture: texture_2d_array<f32>;
 
 struct OceanVertexInput {
   // xy: grid position in cells relative to the level centre, z: 1 for far skirt vertices
@@ -51,6 +80,8 @@ struct OceanVertexOutput {
   // Undisplaced (Lagrangian) texture coordinates of cascades 0/1 and 2.
   @location(1) uv01: vec4<f32>,
   @location(2) uv2: vec2<f32>,
+  // xy: grid position in cells, z: level (for the wireframe view)
+  @location(3) grid: vec3<f32>,
 }
 
 fn cascadeOrigin(level: OceanLevel, cascade: u32) -> vec2<f32> {
@@ -115,34 +146,55 @@ fn vsMain(input: OceanVertexInput) -> OceanVertexOutput {
   output.relative = relative;
   output.uv01 = vec4<f32>(uv[0], uv[1]);
   output.uv2 = uv[2];
+  output.grid = vec3<f32>(input.grid.xy, f32(input.level));
   return output;
 }
 
-fn ggxSunSpecular(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f32 {
+// GGX specular times cos(theta_l) for a directional light; alpha = GGX width.
+fn ggxSpecular(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, alpha: f32) -> f32 {
   let h = normalize(v + l);
   let nDotL = saturate(dot(n, l));
   let nDotV = max(dot(n, v), 1e-4);
   let nDotH = saturate(dot(n, h));
   let vDotH = saturate(dot(v, h));
-  let a = roughness * roughness;
-  let a2 = a * a;
+  let a2 = alpha * alpha;
   let denom = nDotH * nDotH * (a2 - 1.0) + 1.0;
   let distribution = a2 / (PI * denom * denom);
-  let k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+  let k = alpha * 0.5;
   let geometry = nDotV / (nDotV * (1.0 - k) + k) * nDotL / (nDotL * (1.0 - k) + k);
   let fresnel = WATER_F0 + (1.0 - WATER_F0) * pow(1.0 - vDotH, 5.0);
-  return distribution * geometry * fresnel / (4.0 * nDotV) ;
+  return distribution * geometry * fresnel / (4.0 * nDotV);
+}
+
+// Mean-square slope missing below the pixel footprint (table lookup in log k).
+fn unresolvedSlopeVariance(footprintM: f32) -> f32 {
+  let kCut = PI / max(footprintM, 1e-4);
+  let count = oceanRender.roughness.z;
+  let t = clamp((log(kCut) - oceanRender.roughness.x) / oceanRender.roughness.y, 0.0, count - 1.0);
+  let i0 = u32(floor(t));
+  let i1 = min(i0 + 1u, u32(count) - 1u);
+  let a = oceanRender.slopeVariance[i0 / 4u][i0 % 4u];
+  let b = oceanRender.slopeVariance[i1 / 4u][i1 % 4u];
+  return mix(a, b, fract(t));
+}
+
+fn levelColor(level: f32) -> vec3<f32> {
+  let hue = fract(level * 0.37);
+  return saturate(abs(fract(hue + vec3<f32>(0.0, 0.667, 0.333)) * 6.0 - 3.0) - 1.0);
 }
 
 @fragment
 fn fsMain(input: OceanVertexOutput) -> @location(0) vec4<f32> {
   let cascadeCount = u32(oceanRender.patchSizes.w);
   var derivatives = textureSample(derivativesTexture, oceanSampler, input.uv01.xy, 0);
+  var finest = derivatives;
   if (cascadeCount > 1u) {
-    derivatives += textureSample(derivativesTexture, oceanSampler, input.uv01.zw, 1);
+    finest = textureSample(derivativesTexture, oceanSampler, input.uv01.zw, 1);
+    derivatives += finest;
   }
   if (cascadeCount > 2u) {
-    derivatives += textureSample(derivativesTexture, oceanSampler, input.uv2, 2);
+    finest = textureSample(derivativesTexture, oceanSampler, input.uv2, 2);
+    derivatives += finest;
   }
   // Slopes of the displaced surface: dh/dx over the horizontal stretch 1 + dDx/dx.
   let stretchX = max(1.0 + derivatives.z, MIN_SURFACE_STRETCH);
@@ -157,23 +209,55 @@ fn fsMain(input: OceanVertexOutput) -> @location(0) vec4<f32> {
     n = normalize(n - v * (nDotV - 1e-3));
   }
 
+  // Pixel footprint on the surface: slopes of finer waves are filtered away by
+  // the mips and must widen the glint instead (anti-aliasing, LEAN-style).
+  let footprint = max(length(dpdx(input.relative)), length(dpdy(input.relative)));
+  let alpha = sqrt(oceanRender.roughness.w * oceanRender.roughness.w + unresolvedSlopeVariance(footprint));
+
   let fresnel = WATER_F0 + (1.0 - WATER_F0) * pow(1.0 - saturate(dot(n, v)), 5.0);
   var reflected = reflect(-v, n);
   reflected.y = abs(reflected.y);
   let skyReflection = skyRadiance(reflected);
 
   let sunDir = frame.sunDirection.xyz;
-  let sunSpecular = frame.sunIrradiance.rgb * ggxSunSpecular(n, v, sunDir, WATER_SUN_ROUGHNESS);
+  let sunIrradiance = frame.sunIrradiance.rgb;
+  let sunSpecular = sunIrradiance * ggxSpecular(n, v, sunDir, alpha);
 
   // Light scattered back out of the water body, lit by sun and sky.
-  let skyIrradiance = PI * 0.5 * (frame.skyZenith.rgb + frame.skyHorizon.rgb);
-  let irradiance = frame.sunIrradiance.rgb * max(sunDir.y, 0.0) + skyIrradiance;
-  let body = oceanRender.water.rgb * irradiance / PI;
+  let diffuseIrradiance = sunIrradiance * max(sunDir.y, 0.0) + skyIrradiance();
+  var body = oceanRender.water.rgb * diffuseIrradiance / PI;
 
-  var color = mix(body, skyReflection, fresnel) + sunSpecular;
+  // Sunlight transmitted through thin crests towards the viewer.
+  let heightAboveMean = input.relative.y + frame.cameraWorld.y;
+  let crest = saturate(heightAboveMean / max(SSS_CREST_FRACTION_OF_HS * oceanRender.mesh.w, 1e-3));
+  let towardsSun = pow(saturate(dot(-v, sunDir) * 0.5 + 0.5), SSS_FOCUS_POWER);
+  body += SSS_COLOR * sunIrradiance * (SSS_STRENGTH * crest * towardsSun);
 
-  // Haze towards the horizon.
-  let fog = 1.0 - exp(-distance / oceanRender.water.w);
+  var color = mix(body, skyReflection, fresnel);
+
+  // Foam: bright diffuse cover that suppresses the reflection.
+  var foamAmount = 0.0;
+  let cascadeCountFoam = min(cascadeCount, FOAM_CASCADES);
+  foamAmount += textureSample(foamTexture, oceanSampler, input.uv01.xy, 0).x;
+  if (cascadeCountFoam > 1u) {
+    foamAmount += textureSample(foamTexture, oceanSampler, input.uv01.zw, 1).x;
+  }
+  let detail = saturate(0.5 - FOAM_DETAIL_SCALE * (finest.z + finest.w));
+  let coverage = smoothstep(FOAM_COVERAGE_START, 1.0, foamAmount * (FOAM_DETAIL_BASE + FOAM_DETAIL_GAIN * detail));
+  let foamRadiance = FOAM_ALBEDO * (sunIrradiance * saturate(dot(n, sunDir)) + skyIrradiance()) / PI;
+  color = mix(color, foamRadiance, coverage);
+  color += sunSpecular * mix(1.0, FOAM_SPECULAR_SCALE, coverage);
+
+  if (oceanRender.mesh.z > 0.5) {
+    let cellDistance = abs(fract(input.grid.xy + 0.5) - 0.5) / max(fwidth(input.grid.xy), vec2<f32>(1e-5));
+    let line = 1.0 - saturate(min(cellDistance.x, cellDistance.y) - WIREFRAME_LINE_PX);
+    let wireRadiance = levelColor(input.grid.z) * dot(diffuseIrradiance, LUMA) / PI;
+    color = mix(color, wireRadiance, line);
+  }
+
+  // Haze towards the horizon (denser in storms).
+  let fogDistance = oceanRender.water.w * (1.0 - OVERCAST_FOG_REDUCTION * frame.sky.x);
+  let fog = 1.0 - exp(-distance / fogDistance);
   let viewDir = -v;
   color = mix(color, skyRadiance(vec3<f32>(viewDir.x, abs(viewDir.y), viewDir.z)), fog);
   return vec4<f32>(clampHdr(color), 1.0);

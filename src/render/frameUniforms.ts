@@ -1,5 +1,7 @@
 import type { Camera } from './camera';
-import type { SkyState } from '../sky/skyModel';
+import type { Atmosphere } from '../sky/atmosphere';
+import type { SunState } from '../sky/atmosphereModel';
+import { SKY_LIGHT_BYTES } from '../sky/atmosphere';
 import { wrapPeriodic } from '../core/cameraRelative';
 import { CAMERA_WRAP_PERIOD_M } from './renderConfig';
 
@@ -18,20 +20,17 @@ export const FRAME_UNIFORM_OFFSETS = {
   sunDirection: 72,
   sunDiskRadiance: 76,
   sunIrradiance: 80,
-  sunHalo: 84,
-  skyZenith: 88,
-  skyHorizon: 92,
-  skyBelowHorizon: 96,
-  viewport: 100,
-  time: 104,
+  sky: 84,
+  viewport: 88,
+  time: 92,
 } as const;
 
-export const FRAME_UNIFORM_FLOATS = 108;
+export const FRAME_UNIFORM_FLOATS = 96;
 export const FRAME_UNIFORM_BYTES = FRAME_UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT;
 
 export interface FrameUniformInputs {
   readonly camera: Camera;
-  readonly sky: SkyState;
+  readonly sun: SunState;
   readonly viewportWidth: number;
   readonly viewportHeight: number;
   readonly simTimeSeconds: number;
@@ -39,7 +38,10 @@ export interface FrameUniformInputs {
   readonly frameIndex: number;
 }
 
-/** The per-frame uniform block bound at @group(0) @binding(0) by every scene pass. */
+/**
+ * Bind group 0 of every scene pass: the per-frame uniform block plus the sky
+ * resources (sky-view and transmittance LUTs, sampler, sky irradiance).
+ */
 export class FrameUniforms {
   readonly buffer: GPUBuffer;
   /** Layout of bind group 0 shared by all scene pipelines. */
@@ -47,31 +49,49 @@ export class FrameUniforms {
   readonly bindGroup: GPUBindGroup;
   private readonly data = new Float32Array(FRAME_UNIFORM_FLOATS);
 
-  constructor(private readonly device: GPUDevice) {
+  constructor(
+    private readonly device: GPUDevice,
+    atmosphere: Atmosphere,
+  ) {
     this.buffer = device.createBuffer({
       label: 'frame-uniforms',
       size: FRAME_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    const ALL_STAGES = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE;
     this.bindGroupLayout = device.createBindGroupLayout({
       label: 'frame-uniforms',
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+          visibility: ALL_STAGES,
           buffer: { type: 'uniform', minBindingSize: FRAME_UNIFORM_BYTES },
+        },
+        { binding: 1, visibility: ALL_STAGES, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: ALL_STAGES, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: ALL_STAGES, sampler: { type: 'filtering' } },
+        {
+          binding: 4,
+          visibility: ALL_STAGES,
+          buffer: { type: 'read-only-storage', minBindingSize: SKY_LIGHT_BYTES },
         },
       ],
     });
     this.bindGroup = device.createBindGroup({
       label: 'frame-uniforms',
       layout: this.bindGroupLayout,
-      entries: [{ binding: 0, resource: { buffer: this.buffer } }],
+      entries: [
+        { binding: 0, resource: { buffer: this.buffer } },
+        { binding: 1, resource: atmosphere.skyViewLut.createView() },
+        { binding: 2, resource: atmosphere.transmittanceLut.createView() },
+        { binding: 3, resource: atmosphere.sampler },
+        { binding: 4, resource: { buffer: atmosphere.skyLightBuffer } },
+      ],
     });
   }
 
   update(inputs: FrameUniformInputs): void {
-    const { camera, sky } = inputs;
+    const { camera, sun } = inputs;
     const d = this.data;
     const o = FRAME_UNIFORM_OFFSETS;
 
@@ -95,13 +115,10 @@ export class FrameUniforms {
       CAMERA_WRAP_PERIOD_M,
     );
 
-    set4(d, o.sunDirection, ...sky.sunDirection, Math.cos(sky.sunAngularRadiusRad));
-    set4(d, o.sunDiskRadiance, ...sky.sunDiskRadiance, 0);
-    set4(d, o.sunIrradiance, ...sky.sunIrradiance, 0);
-    set4(d, o.sunHalo, ...sky.sunHalo, sky.sunHaloAsymmetry);
-    set4(d, o.skyZenith, ...sky.zenith, 0);
-    set4(d, o.skyHorizon, ...sky.horizon, 0);
-    set4(d, o.skyBelowHorizon, ...sky.belowHorizon, 0);
+    set4(d, o.sunDirection, ...sun.direction, Math.cos(sun.angularRadiusRad));
+    set4(d, o.sunDiskRadiance, ...sun.diskRadiance, 0);
+    set4(d, o.sunIrradiance, ...sun.irradiance, 0);
+    set4(d, o.sky, sun.overcast, 0, 0, 0);
 
     const width = Math.max(1, inputs.viewportWidth);
     const height = Math.max(1, inputs.viewportHeight);

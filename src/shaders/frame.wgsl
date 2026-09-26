@@ -1,4 +1,4 @@
-// Per-frame uniform block, bound at @group(0) @binding(0) by every scene pass.
+// Per-frame resources, bound as @group(0) by every scene pass.
 // Field order and sizes must match FRAME_UNIFORM_OFFSETS in render/frameUniforms.ts.
 //
 // Matrices are camera-relative: world geometry is submitted as
@@ -15,19 +15,26 @@ struct FrameUniforms {
   cameraWrapped: vec4<f32>,
   // xyz: unit vector towards the sun, w: cos(sun angular radius)
   sunDirection: vec4<f32>,
-  // rgb: sun disk radiance after extinction
+  // rgb: sun disk radiance at sea level (after clouds)
   sunDiskRadiance: vec4<f32>,
-  // rgb: direct-beam irradiance at normal incidence
+  // rgb: direct-beam irradiance at normal incidence (after clouds)
   sunIrradiance: vec4<f32>,
-  // rgb: halo strength, w: Henyey-Greenstein asymmetry g
-  sunHalo: vec4<f32>,
-  skyZenith: vec4<f32>,
-  skyHorizon: vec4<f32>,
-  skyBelowHorizon: vec4<f32>,
+  // x: cloud cover fraction
+  sky: vec4<f32>,
   // width, height, 1/width, 1/height (pixels)
   viewport: vec4<f32>,
   // x: simulation time (s), y: frame time (s), z: frame index
   time: vec4<f32>,
 }
 
+struct SkyLight {
+  // rgb: sky irradiance on a horizontal surface
+  irradiance: vec4<f32>,
+}
+
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
+// Sky radiance by direction (sky/atmosphere.ts), see skyCommon.wgsl.
+@group(0) @binding(1) var skyViewLut: texture_2d<f32>;
+@group(0) @binding(2) var transmittanceLut: texture_2d<f32>;
+@group(0) @binding(3) var atmosphereSampler: sampler;
+@group(0) @binding(4) var<storage, read> skyLight: SkyLight;

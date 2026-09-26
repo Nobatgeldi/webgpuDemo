@@ -1,7 +1,18 @@
 import GUI from 'lil-gui';
 import { SETTINGS_LIMITS, roundWindSpeed, type AppSettings } from '../settings';
 import type { ToneMapper } from '../render/tonemapPass';
+import type { DebugTextureName } from '../render/debugTextureView';
 import { beaufortToWindSpeed, windSpeedToBeaufort } from '../ocean/beaufort';
+
+const DEBUG_TEXTURE_OPTIONS: Record<string, DebugTextureName> = {
+  Kapalı: 'none',
+  'Spektrum h0(k)': 'spectrum',
+  'Yer değiştirme': 'displacement',
+  'Eğimler / türevler': 'derivatives',
+  'Köpük / Jacobian': 'foam',
+  'Gökyüzü LUT': 'skyView',
+  'Geçirgenlik LUT': 'transmittance',
+};
 
 const TONE_MAPPER_OPTIONS: Record<string, ToneMapper> = {
   'ACES (film)': 'aces',
@@ -45,15 +56,17 @@ export class ControlPanel {
       .add(settings, 'choppiness', L.choppiness.min, L.choppiness.max, L.choppiness.step)
       .name('Dalga keskinliği');
 
-    const sun = this.gui.addFolder('Güneş');
+    const sun = this.gui.addFolder('Güneş ve gökyüzü');
     sun
       .add(settings, 'sunElevationDeg', L.sunElevationDeg.min, L.sunElevationDeg.max, L.sunElevationDeg.step)
       .name('Yükseklik (°)');
     sun
       .add(settings, 'sunAzimuthDeg', L.sunAzimuthDeg.min, L.sunAzimuthDeg.max, L.sunAzimuthDeg.step)
       .name('Azimut (°, kuzeyden)');
+    sun.add(settings, 'stormClouds').name('Fırtınada bulut örtüsü');
 
     const display = this.gui.addFolder('Görüntü');
+    display.add(settings, 'autoExposure').name('Otomatik pozlama');
     display
       .add(settings, 'exposureEv', L.exposureEv.min, L.exposureEv.max, L.exposureEv.step)
       .name('Pozlama (EV)');
@@ -68,6 +81,9 @@ export class ControlPanel {
 
     const debug = this.gui.addFolder('Hata ayıklama');
     debug.add(settings, 'showGrid').name('Referans ızgarası (y = 0)');
+    debug.add(settings, 'oceanWireframe').name('Okyanus tel kafes (LOD)');
+    debug.add(settings, 'debugTexture', DEBUG_TEXTURE_OPTIONS).name('Doku görüntüleyici');
+    debug.add(settings, 'debugTextureCascade', 0, 2, 1).name('Kaskad');
     debug.add(settings, 'debugOverlay').name('Debug katmanı (F)');
   }
 

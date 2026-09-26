@@ -7,6 +7,7 @@ import {
   OCEAN_LEVEL_OFFSETS,
   OCEAN_RENDER_UNIFORM_OFFSETS,
   RENDER_UNIFORM_BYTES,
+  SLOPE_TABLE_SIZE,
 } from '../src/ocean/oceanPass';
 import { OCEAN_COMPUTE_UNIFORM_BYTES } from '../src/ocean/spectrum';
 import { MAX_CASCADES } from '../src/ocean/oceanConfig';
@@ -25,6 +26,7 @@ describe('ocean uniform layouts', () => {
   });
 
   it('OceanRenderUniforms and OceanLevel match the TypeScript writer', () => {
+    expect(oceanWgsl).toContain(`array<vec4<f32>, ${SLOPE_TABLE_SIZE / 4}>`);
     const uniforms = computeStructLayout(oceanWgsl, 'OceanRenderUniforms');
     expect(uniforms.offsets).toEqual(bytes(OCEAN_RENDER_UNIFORM_OFFSETS));
     expect(uniforms.size).toBe(RENDER_UNIFORM_BYTES);
@@ -49,5 +51,15 @@ describe('generated spectrum constants', () => {
       expect(oceanComputeWgsl).toMatch(new RegExp(`\\b${name}\\b`));
       expect(oceanComputeWgsl).not.toMatch(new RegExp(`const ${name}\\b`));
     }
+  });
+});
+
+describe('debug texture viewer layout', () => {
+  it('matches the three vec4 written by DebugTextureView', async () => {
+    const source = (await import('../src/shaders/debugTexture.wgsl?raw')).default;
+    expect(computeStructLayout(source, 'DebugViewUniforms')).toEqual({
+      offsets: { rect: 0, params: 16, viewport: 32 },
+      size: 48,
+    });
   });
 });

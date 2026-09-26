@@ -1,6 +1,6 @@
 // Debug reference grid on the y = 0 plane (sea level). Verifies camera-relative
 // rendering and reversed-Z depth: lines stay stable at any distance from the origin.
-// Requires frame.wgsl, common.wgsl, skyCommon.wgsl.
+// Requires the scene prelude (shaders/index.ts).
 
 // Half-size of the grid quad around the camera (m); beyond it only sky is visible.
 const GRID_HALF_EXTENT_M: f32 = 40000.0;
@@ -87,10 +87,9 @@ fn fsMain(in: GridVertex) -> @location(0) vec4<f32> {
   albedo = mix(albedo, GRID_AXIS_X_ALBEDO, axisLine(absoluteXZ.y));
   albedo = mix(albedo, GRID_AXIS_Z_ALBEDO, axisLine(absoluteXZ.x));
 
-  // Lambertian lighting from the sun and a uniform sky approximated by its zenith/horizon mean.
+  // Lambertian lighting from the sun and the sky.
   let sunCos = max(frame.sunDirection.y, 0.0);
-  let skyIrradiance = PI * 0.5 * (frame.skyZenith.rgb + frame.skyHorizon.rgb);
-  let irradiance = frame.sunIrradiance.rgb * sunCos + skyIrradiance;
+  let irradiance = frame.sunIrradiance.rgb * sunCos + skyIrradiance();
   var color = albedo * irradiance / PI;
 
   // Fade into the horizon haze, approximated by the sky mirrored at the horizon.

@@ -1,6 +1,6 @@
 // Sky background pass. Drawn after opaque geometry at the far plane (depth 0 in
 // reversed Z) with 'greater-equal', so it only fills pixels nothing else covered.
-// Requires frame.wgsl, common.wgsl, skyCommon.wgsl.
+// Requires the scene prelude (shaders/index.ts).
 
 @vertex
 fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> FullscreenVertex {

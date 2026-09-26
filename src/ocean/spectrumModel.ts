@@ -267,6 +267,91 @@ export function peakWavelength(p: JonswapParameters): number {
   return p.calm ? 0 : (2 * Math.PI * GRAVITY_M_S2) / (p.peakOmega * p.peakOmega);
 }
 
+// --- Surface slopes --------------------------------------------------------
+/** Cox & Munk (1954) clean-surface total slope variance: a + b U (U in m/s). */
+const COX_MUNK_OFFSET = 0.003;
+const COX_MUNK_PER_WIND = 5.12e-3;
+
+/** Measured total (upwind + crosswind) mean-square slope of the sea surface. */
+export function coxMunkSlopeVariance(windSpeedMs: number): number {
+  return COX_MUNK_OFFSET + COX_MUNK_PER_WIND * Math.max(0, windSpeedMs);
+}
+
+/**
+ * Total mean-square slope of the model spectrum for wavenumbers below `kMax`:
+ * integral of k^2 S(k) = integral of (omega^4 / g^2) S(omega) d(omega).
+ */
+export function resolvedSlopeVariance(p: JonswapParameters, kMax: number): number {
+  if (p.calm || !(kMax > 0)) {
+    return 0;
+  }
+  // With omega = x omega_p the integrand becomes alpha x^4 shape(x) dx.
+  const xMax = Math.sqrt(GRAVITY_M_S2 * kMax) / p.peakOmega;
+  const xMin = 0.25;
+  if (!(xMax > xMin)) {
+    return 0;
+  }
+  const steps = 1000;
+  const logMin = Math.log(xMin);
+  const h = (Math.log(xMax) - logMin) / steps;
+  let sum = 0;
+  for (let i = 0; i <= steps; i++) {
+    const x = Math.exp(logMin + i * h);
+    const weight = i === 0 || i === steps ? 1 : i % 2 === 1 ? 4 : 2;
+    sum += weight * x ** 4 * jonswapShape(x, p.gamma) * x;
+  }
+  return (p.alpha * sum * h) / 3;
+}
+
+/**
+ * Slope variance that a surface filtered to wavenumbers below `kCut` misses
+ * compared with the measured Cox-Munk total. The renderer turns it into extra
+ * GGX roughness, so distant (mip-filtered) water keeps the right glint width
+ * instead of aliasing. `kRenderedMax` is the highest wavenumber the textures
+ * contain at all.
+ */
+export function unresolvedSlopeVariance(p: JonswapParameters, kCut: number, kRenderedMax: number): number {
+  const total = coxMunkSlopeVariance(p.windSpeedMs);
+  return Math.max(0, total - resolvedSlopeVariance(p, Math.min(kCut, kRenderedMax)));
+}
+
+// --- Whitecaps -----------------------------------------------------------------
+const MONAHAN_COEFFICIENT = 3.84e-6;
+const MONAHAN_EXPONENT = 3.41;
+
+/** Whitecap coverage fraction (Monahan & O'Muircheartaigh 1980), capped at 1. */
+export function whitecapCoverage(windSpeedMs: number): number {
+  return Math.min(1, MONAHAN_COEFFICIENT * Math.pow(Math.max(0, windSpeedMs), MONAHAN_EXPONENT));
+}
+
+/**
+ * Inverse of the standard normal CDF (Acklam's rational approximation,
+ * relative error < 1.2e-9). Used to place foam thresholds at a quantile of the
+ * approximately Gaussian Jacobian distribution.
+ */
+export function inverseNormalCdf(p: number): number {
+  if (!(p > 0 && p < 1)) {
+    return p <= 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+  }
+  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
+  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+  const low = 0.02425;
+  const poly = (coefficients: number[], x: number): number => coefficients.reduce((sum, k) => sum * x + k, 0);
+  if (p < low) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return poly(c, q) / (poly(d, q) * q + 1);
+  }
+  if (p > 1 - low) {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    return -poly(c, q) / (poly(d, q) * q + 1);
+  }
+  const q = p - 0.5;
+  const r = q * q;
+  return (poly(a, r) * q) / (poly(b, r) * r + 1);
+}
+
 /** Exposes the shape integral for diagnostics and tests. */
 export function jonswapEnhancement(gamma: number): number {
   // Ratio of the JONSWAP to the Pierson-Moskowitz (gamma = 1) shape integral.

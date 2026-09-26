@@ -4,7 +4,11 @@ import { WGSL } from '../shaders';
 export type ToneMapper = 'aces' | 'agx';
 
 const TONEMAPPER_IDS: Record<ToneMapper, number> = { aces: 0, agx: 1 };
-const TONEMAP_UNIFORM_BYTES = 16;
+export const TONEMAP_UNIFORM_BYTES = 32;
+/** Exposed mean sky radiance targeted by auto exposure. */
+const AUTO_EXPOSURE_KEY = 0.6;
+/** Mean sky radiance below which auto exposure stops brightening (lets night be dark). */
+const AUTO_EXPOSURE_MIN_RADIANCE = 2e-3;
 
 export interface TonemapSettings {
   /** Exposure compensation in stops. */
@@ -12,6 +16,8 @@ export interface TonemapSettings {
   readonly toneMapper: ToneMapper;
   /** Dither amplitude in 8-bit code values; 0 disables dithering. */
   readonly ditherLsb: number;
+  /** Adapt exposure to the sky brightness (exposureEv then acts as compensation). */
+  readonly autoExposure: boolean;
 }
 
 /**
@@ -30,6 +36,7 @@ export class TonemapPass {
     private readonly device: GPUDevice,
     private readonly pipeline: GPURenderPipeline,
     private readonly bindGroupLayout: GPUBindGroupLayout,
+    private readonly skyLightBuffer: GPUBuffer,
   ) {
     this.uniformBuffer = device.createBuffer({
       label: 'tonemap-uniforms',
@@ -38,7 +45,11 @@ export class TonemapPass {
     });
   }
 
-  static async create(device: GPUDevice, outputFormat: GPUTextureFormat): Promise<TonemapPass> {
+  static async create(
+    device: GPUDevice,
+    outputFormat: GPUTextureFormat,
+    skyLightBuffer: GPUBuffer,
+  ): Promise<TonemapPass> {
     const shader = composeWgsl('tonemap', [WGSL.common, WGSL.tonemap]);
     const module = await createShaderModule(device, shader);
     const bindGroupLayout = device.createBindGroupLayout({
@@ -54,6 +65,7 @@ export class TonemapPass {
           visibility: GPUShaderStage.FRAGMENT,
           texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
         },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       ],
     });
     const pipeline = await device.createRenderPipelineAsync({
@@ -69,7 +81,7 @@ export class TonemapPass {
       },
       primitive: { topology: 'triangle-list' },
     });
-    return new TonemapPass(device, pipeline, bindGroupLayout);
+    return new TonemapPass(device, pipeline, bindGroupLayout, skyLightBuffer);
   }
 
   /** Uploads per-frame parameters. */
@@ -78,6 +90,9 @@ export class TonemapPass {
     this.uniformUints[1] = TONEMAPPER_IDS[settings.toneMapper];
     this.uniformFloats[2] = settings.ditherLsb;
     this.uniformUints[3] = frameIndex >>> 0;
+    this.uniformFloats[4] = settings.autoExposure ? 1 : 0;
+    this.uniformFloats[5] = AUTO_EXPOSURE_KEY;
+    this.uniformFloats[6] = AUTO_EXPOSURE_MIN_RADIANCE;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
 
@@ -96,6 +111,7 @@ export class TonemapPass {
         entries: [
           { binding: 0, resource: { buffer: this.uniformBuffer } },
           { binding: 1, resource: hdrView },
+          { binding: 2, resource: { buffer: this.skyLightBuffer } },
         ],
       });
       this.boundHdrView = hdrView;
