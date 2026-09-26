@@ -131,7 +131,7 @@ sönüm, rüzgârla kalibre edilen örtü oranı), mesafe/eğim varyansına bağ
 pürüzlülük (LEAN/Toksvig benzeri), sis/atmosferik perspektif, uzakta tiling'i
 kırmak için düşük frekanslı modülasyon, FFT/spektrum doku görüntüleyici.
 
-### Faz 3 — Gemi ve yüzerlik
+### Faz 3 — Gemi ve yüzerlik ✅
 `WaterQuery` (sabit nokta iterasyonu ile x + D(x) = p çözümü, staging halkası),
 `WaterHeightProvider`, parametrik gövde, rijit cisim, Kerner üçgen yüzerliği,
 sönüm (ITTC-1957, basınç sürüklemesi, yalpa sönümü), fizik testleri (denge

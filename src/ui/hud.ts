@@ -15,8 +15,18 @@ export interface HudSeaState {
   readonly significantWaveHeightM: number;
 }
 
+export interface HudShipState {
+  /** Heel, positive to starboard (deg). */
+  readonly rollDeg: number;
+  /** Trim, positive bow up (deg). */
+  readonly pitchDeg: number;
+  readonly headingDeg: number;
+  readonly speedKnots: number;
+}
+
 export interface HudStats {
   readonly sea: HudSeaState;
+  readonly ship: HudShipState;
   readonly fps: number;
   readonly cpuFrameMs: number | null;
   /** Null when timestamp queries are unavailable. */
@@ -30,7 +40,7 @@ export interface HudStats {
 
 export class Hud {
   private readonly fields: Record<
-    'wind' | 'windDirection' | 'hs' | 'fps' | 'cpu' | 'gpu' | 'resolution' | 'simTime',
+    'speed' | 'heading' | 'attitude' | 'wind' | 'windDirection' | 'hs' | 'fps' | 'cpu' | 'gpu' | 'resolution' | 'simTime',
     HTMLElement
   >;
   private readonly pausedBanner: HTMLElement;
@@ -42,6 +52,9 @@ export class Hud {
     this.pausedBanner.hidden = true;
     root.append(this.pausedBanner);
     this.fields = {
+      speed: this.addRow('Hız'),
+      heading: this.addRow('Rota'),
+      attitude: this.addRow('Yalpa / baş-kıç'),
       wind: this.addRow('Rüzgâr'),
       windDirection: this.addRow('Rüzgâr yönü (geldiği)'),
       hs: this.addRow('Belirgin dalga yük. Hs'),
@@ -62,6 +75,11 @@ export class Hud {
     }
     this.lastRefreshMs = nowMs;
     this.pausedBanner.hidden = !stats.paused;
+    const ship = stats.ship;
+    this.fields.speed.textContent = `${ship.speedKnots.toFixed(1)} kn`;
+    this.fields.heading.textContent = `${Math.round(ship.headingDeg) % 360}°`;
+    const signed = (v: number): string => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}°`;
+    this.fields.attitude.textContent = `${signed(ship.rollDeg)} / ${signed(ship.pitchDeg)}`;
     const sea = stats.sea;
     const target = sea.targetWindSpeedMs === null ? '' : ` → ${sea.targetWindSpeedMs.toFixed(1)}`;
     this.fields.wind.textContent = `Bf ${sea.beaufort} · ${sea.windSpeedMs.toFixed(1)}${target} m/s`;

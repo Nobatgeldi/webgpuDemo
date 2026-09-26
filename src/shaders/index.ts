@@ -23,6 +23,9 @@ import gridWgsl from './grid.wgsl?raw';
 import skyWgsl from './sky.wgsl?raw';
 import skyCommonWgsl from './skyCommon.wgsl?raw';
 import tonemapWgsl from './tonemap.wgsl?raw';
+import waterQueryWgsl from './waterQuery.wgsl?raw';
+import shipWgsl from './ship.wgsl?raw';
+import debugDrawWgsl from './debugDraw.wgsl?raw';
 
 const chunk = (label: string, code: string): WgslChunk => ({ label, code });
 
@@ -47,6 +50,9 @@ export const WGSL = {
   sky: chunk('sky.wgsl', skyWgsl),
   skyCommon: chunk('skyCommon.wgsl', skyCommonWgsl),
   tonemap: chunk('tonemap.wgsl', tonemapWgsl),
+  waterQuery: chunk('waterQuery.wgsl', waterQueryWgsl),
+  ship: chunk('ship.wgsl', shipWgsl),
+  debugDraw: chunk('debugDraw.wgsl', debugDrawWgsl),
 } as const;
 
 /** Chunks every scene shader starts with: frame resources, helpers and sky lookups. */

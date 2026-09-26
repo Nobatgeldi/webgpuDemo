@@ -9,6 +9,7 @@ import {
   type OceanQualityConfig,
 } from './oceanConfig';
 import { OceanRenderer, SLOPE_TABLE_SIZE } from './oceanPass';
+import { WaterQuery } from './waterQuery';
 import {
   bandSignificantWaveHeight,
   inverseNormalCdf,
@@ -207,6 +208,11 @@ export class Ocean {
       slopeTableLogStep: SLOPE_TABLE_LOG_STEP,
       slopeVariance: this.slopeVariance,
     });
+  }
+
+  /** Creates a water height query service on this ocean's textures. */
+  createWaterQuery(device: GPUDevice, capacity: number): Promise<WaterQuery> {
+    return WaterQuery.create(device, this.cascades, capacity);
   }
 
   /** GPU textures for the debug texture viewer. */

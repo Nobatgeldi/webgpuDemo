@@ -82,6 +82,8 @@ export class ControlPanel {
     const debug = this.gui.addFolder('Hata ayıklama');
     debug.add(settings, 'showGrid').name('Referans ızgarası (y = 0)');
     debug.add(settings, 'oceanWireframe').name('Okyanus tel kafes (LOD)');
+    debug.add(settings, 'debugSubmerged').name('Batmış üçgenler');
+    debug.add(settings, 'debugForces').name('Kuvvet vektörleri');
     debug.add(settings, 'debugTexture', DEBUG_TEXTURE_OPTIONS).name('Doku görüntüleyici');
     debug.add(settings, 'debugTextureCascade', 0, 2, 1).name('Kaskad');
     debug.add(settings, 'debugOverlay').name('Debug katmanı (F)');

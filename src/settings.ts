@@ -43,6 +43,8 @@ export interface AppSettings {
   debugOverlay: boolean;
   showGrid: boolean;
   oceanWireframe: boolean;
+  debugSubmerged: boolean;
+  debugForces: boolean;
   debugTexture: DebugTextureName;
   debugTextureCascade: number;
 }
@@ -85,6 +87,8 @@ export function createDefaultSettings(): AppSettings {
     debugOverlay: false,
     showGrid: false,
     oceanWireframe: false,
+    debugSubmerged: false,
+    debugForces: false,
     debugTexture: 'none',
     debugTextureCascade: 0,
   };

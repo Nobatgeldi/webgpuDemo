@@ -4,9 +4,9 @@ Tarayıcıda çalışan, ham WebGPU + WGSL ile yazılmış bir açık deniz gemi
 simülatörü. Hedef: rüzgâra göre fiziksel olarak tutarlı üretilen FFT okyanusu
 ve bu dalgalara gerçek kuvvetlerle tepki veren 6 serbestlik dereceli bir gemi.
 
-> **Durum:** Faz 0 (iskelet), Faz 1 (FFT okyanus çekirdeği) ve Faz 2 (görsel
-> kalite: fiziksel atmosfer, köpük, SSS, parıldamaya karşı pürüzlülük)
-> tamamlandı. Gemi ve fizik sonraki fazlarda eklenecek; yol haritası için
+> **Durum:** Faz 0 (iskelet), Faz 1 (FFT okyanus çekirdeği), Faz 2 (görsel
+> kalite) ve Faz 3 (su sorgusu, gövde, 6DOF yüzerlik fiziği) tamamlandı.
+> Sürüş, kamera modları ve rüzgâr etkileri sonraki fazlarda; yol haritası için
 > [docs/PLAN.md](docs/PLAN.md).
 
 ## Gereksinimler
@@ -101,6 +101,10 @@ src/
                      tonemapPass (ACES/AgX), gridPass (debug ızgarası)
   sky/               atmosphereModel (fiziksel atmosfer, CPU referansı), atmosphere
                      (transmittance/sky-view LUT'ları, gökyüzü ışınımı), skyPass
+  ship/              shipConfig, hull (parametrik gövde), hydrostatics, rigidBody (6DOF),
+                     buoyancy (Kerner üçgen kesme), hydrodynamics (ITTC-1957, sönüm),
+                     waterHeightProvider (arayüz + analitik su), waterGrid (GPU su ızgarası),
+                     ship, shipMesh/shipRenderer (görsel model), shipSystem (birleştirici)
   ocean/             beaufort, spectrumModel (JONSWAP + Donelan-Banner, CPU referansı),
                      windState, fftReference, spectrum/fft/cascades (GPU simülasyonu),
                      oceanMesh (clipmap), oceanPass (çizim), ocean (birleştirici)
@@ -155,6 +159,19 @@ köpük %28.9 / Monahan %27.0). Hata ayıklama panelindeki doku görüntüleyici
 spektrumu, yer değiştirme ve türev dokularını, köpük/Jacobian'ı ve atmosfer
 LUT'larını gösterir; tel kafes görünümü LOD halkalarını renklendirir.
 
+**Gemi fiziği:** 120 Hz sabit adımda yarı-örtük Euler ile 6DOF rijit cisim
+(quaternion, gövde eksenlerinde köşegen atalet, Euler denklemleri). Yüzerlik
+Kerner yöntemiyle: ~500 üçgenlik kapalı fizik gövdesinin her üçgeni yerel su
+yüzeyine göre kesilir, batmış parçalara ρ·g·d·A·n hidrostatik kuvveti
+merkezlerinde uygulanır. Hidrodinamik: ITTC-1957 sürtünmesi, panel basınç
+sönümü (dalıp çıkma sönüm oranına kalibre edilir) ve yalpa sönümü. Su
+yüksekliği tek kaynaktan, GPU okyanusundan gelir: her kare gemiye hizalı
+40×16'lık bir ızgara (geminin tahmini konumunda) ve kamera noktası compute
+shader ile sorgulanır (x + D(x) = p için 4 sabit nokta iterasyonu), sonuçlar
+staging halkasıyla 1–3 kare gecikmeyle okunur; fizik her adımda bu ızgaradan
+bilineer ara değerleme yapar. Testlerde aynı fizik analitik su sağlayıcılarıyla
+(düz su, sinüs/Gerstner) çalışır.
+
 **Hassasiyet:** Dünya konumları CPU'da `double` tutulur; GPU'ya kameraya göreli
 float32 gönderilir ve view matrisi yalnızca rotasyon içerir. Periyodik desenler
 için kamera konumu CPU'da `double` ile periyoda göre sarılır, böylece başlangıç
@@ -205,8 +222,27 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 - **Dalga keskinliği:** Varsayılan λ = 0.9; yatay yer değiştirme D = i(k/|k|)h
   olarak tanımlandığından pozitif λ tepeleri sivriltir (Gerstner benzeri).
 - **Hs (HUD):** Sürekli spektrumun tamamından (4√m0) hesaplanır.
-- **Kamera (geçici):** Su yüksekliği sorgusu Faz 3'te gelene kadar orbit kamera
-  deniz seviyesinin en az 1.5 m + 1.2·Hs üstünde tutulur.
+- **Kamera:** Orbit kamera geminin ağırlık merkezini izler ve altındaki su
+  yüzeyinin (GPU sorgusu) en az 1.5 m üstünde tutulur; ilk sonuç gelene kadar
+  deniz seviyesi + 1.5 m + 1.2·Hs varsayılır.
+
+### Gemi
+- **Boyutlar:** 50 m × 9 m, draft 2.5 m, 500 t, fribord 2.6 m, GM 1.2 m.
+  Gövde kesit üsteli (şekil doluluğu) başlangıçta, dizayn draftında tam 500 t
+  deplase edecek şekilde otomatik bulunur (blok katsayısı ≈ 0.43).
+- **Ağırlık merkezi:** B'nin düşeyinde, KG = KB + BM − GM (KB 1.64 m, BM 4.24 m
+  → KG ≈ 4.7 m omurgadan). Atalet yarıçapları: yalpa 0.38·B (+%20 eklenmiş
+  atalet), baş-kıç 0.25·L, dönme 0.26·L. Beklenen yalpa periyodu 6.9 s, dalıp
+  çıkma 2.3 s.
+- **Sönüm:** Panel basınç sönümü dalıp çıkmada ζ = 0.2 verecek şekilde
+  kalibre edilir (gerçekte ışınım sönümü); geminin ileri hızı 0.3–1.5 m/s
+  üstünde bu sönümden çıkarılır (seyirde direnç sürtünme + Faz 4'te dalga
+  direnci). Ek yalpa sönümü ζ = 0.05 doğrusal + karesel terim (yalpa omurgaları).
+  Eklenmiş kütle yalnızca yalpada modellenmiştir.
+- **Su ızgarası:** Gemi çevresinde 8 m pay, 40 × 16 örnek (~1.7 m aralık); daha
+  kısa dalgalar yüzerlikte ortalanır.
+- **Güverte kapalıdır:** Fizik ve görsel gövde kapalı olduğundan gövde içinde su
+  görünmez; ayrı bir stencil maskesi gerekmedi.
 
 ### Görüntü
 
@@ -233,7 +269,13 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 
 ## Bilinen sınırlamalar
 
-- Gemi, fizik ve gemiye rüzgâr etkileri henüz yok (Faz 3–5).
+- Sürüş (pervane, dümen), kamera modları ve gemiye rüzgâr kuvveti henüz yok
+  (Faz 4–5).
+- Hidrodinamik sönüm su parçacığı (yörünge) hızlarını hesaba katmaz; bu yüzden
+  dalgalarda geminin yavaş ortalama sürüklenmesi (düzensiz denizde ~0.2 m/s)
+  yön olarak fiziksel değildir. Slamming ve yeşil su (güverteye su) etkileri yok.
+- Su sorgusu sonuçları 1–3 kare (~50 ms) gecikmelidir; ızgara gemiyi tahmini
+  konumunda örnekler, ama dalganın bu süredeki ilerlemesi telafi edilmez.
 - Köpük dokusu en büyük kaskadın çözünürlüğündedir; düşük kalitede (128²)
   yakın plandaki köpük lekeleri iri görünür.
 - Çok yüksekten bakıldığında en büyük kaskadın 1 km'lik tekrarını kırmak için

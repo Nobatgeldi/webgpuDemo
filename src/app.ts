@@ -21,6 +21,10 @@ import { Atmosphere } from './sky/atmosphere';
 import { computeSunState, overcastFromWind, type SunState } from './sky/atmosphereModel';
 import { SkyPass } from './sky/skyPass';
 import { DebugTextureView } from './render/debugTextureView';
+import { DebugDraw } from './render/debugDraw';
+import { ShipSystem } from './ship/shipSystem';
+import { KNOTS_TO_MS, PATROL_BOAT } from './ship/shipConfig';
+import type { WaterQuery } from './ocean/waterQuery';
 import { DebugOverlay, type DebugSection } from './ui/debugOverlay';
 import { Hud } from './ui/hud';
 import { ControlPanel } from './ui/panel';
@@ -36,13 +40,15 @@ const FPS_WINDOW_MS = 500;
 /** Smoothing of the CPU frame time readout (frames). */
 const CPU_TIME_SMOOTHING_FRAMES = 30;
 
-/** Camera clearance above the mean sea level (m) ... */
+/** Camera clearance above the water surface below it (m). */
 const CAMERA_MIN_CLEARANCE_M = 1.5;
 /**
- * ... plus this multiple of Hs, a conservative bound of crest heights. Keeps the
- * orbit camera out of the water until the water-height query (phase 3) exists.
+ * Before the first water query result arrives, a conservative crest height
+ * (this multiple of Hs above sea level) is assumed instead.
  */
 const CAMERA_CREST_ALLOWANCE_PER_HS = 1.2;
+/** Points per frame for water height queries (ship grid, camera, ...). */
+const WATER_QUERY_CAPACITY = 1024;
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -71,6 +77,9 @@ export interface AppOptions {
 }
 
 interface AppPasses {
+  readonly shipSystem: ShipSystem;
+  readonly waterQuery: WaterQuery;
+  readonly debugDraw: DebugDraw;
   readonly atmosphere: Atmosphere;
   readonly debugTextureView: DebugTextureView;
   readonly frameUniforms: FrameUniforms;
@@ -115,6 +124,9 @@ export class App {
   private readonly ocean: Ocean;
   private readonly atmosphere: Atmosphere;
   private readonly debugTextureView: DebugTextureView;
+  private readonly shipSystem: ShipSystem;
+  private readonly waterQuery: WaterQuery;
+  private readonly debugDraw: DebugDraw;
 
   private constructor(options: AppOptions, passes: AppPasses) {
     const { gpu, elements, launch } = options;
@@ -129,6 +141,9 @@ export class App {
     this.ocean = passes.ocean;
     this.atmosphere = passes.atmosphere;
     this.debugTextureView = passes.debugTextureView;
+    this.shipSystem = passes.shipSystem;
+    this.waterQuery = passes.waterQuery;
+    this.debugDraw = passes.debugDraw;
     this.settings = createDefaultSettings();
     this.settings.paused = launch.paused;
     if (launch.beaufort !== null) {
@@ -174,12 +189,15 @@ export class App {
     const frameUniforms = new FrameUniforms(device, atmosphere);
     const { quality, seed } = options.launch;
     // Pipelines compile in parallel.
-    const [skyPass, gridPass, tonemapPass, ocean] = await Promise.all([
+    const [skyPass, gridPass, tonemapPass, ocean, shipSystem, debugDraw] = await Promise.all([
       SkyPass.create(device, frameUniforms),
       GridPass.create(device, frameUniforms),
       TonemapPass.create(device, canvasFormat, atmosphere.skyLightBuffer),
       Ocean.create(device, frameUniforms, quality, seed),
+      ShipSystem.create(device, frameUniforms, PATROL_BOAT),
+      DebugDraw.create(device, frameUniforms, canvasFormat),
     ]);
+    const waterQuery = await ocean.createWaterQuery(device, WATER_QUERY_CAPACITY);
     const oceanTextures = ocean.debugTextures;
     const debugTextureView = await DebugTextureView.create(device, canvasFormat, {
       spectrum: oceanTextures.spectrum,
@@ -190,6 +208,9 @@ export class App {
       transmittance: atmosphere.transmittanceLut,
     });
     return new App(options, {
+      shipSystem,
+      waterQuery,
+      debugDraw,
       atmosphere,
       debugTextureView,
       frameUniforms,
@@ -208,8 +229,9 @@ export class App {
     this.loop.stop();
   }
 
-  /** One fixed simulation step. Physics systems hook in here from phase 3 on. */
+  /** One fixed simulation step. */
   private step(): void {
+    this.shipSystem.step(this.clock.stepSeconds, this.clock.time);
     this.clock.advance();
     this.wind.setTarget(this.settings.windSpeedMs, this.settings.windDirectionDeg * DEG_TO_RAD);
     this.wind.step(this.clock.stepSeconds);
@@ -227,9 +249,14 @@ export class App {
       fetchM: this.settings.fetchKm * METRES_PER_KM,
       choppiness: this.settings.choppiness,
     });
+    // The camera orbits the ship's (interpolated) centre of gravity.
+    this.orbit.target.set(this.shipSystem.updateRenderPose(this.settings.paused ? 1 : frame.alpha));
     this.orbit.handleInput(this.input);
+    const waterBelowCamera = this.shipSystem.cameraWaterHeight;
     const minAltitude =
-      CAMERA_MIN_CLEARANCE_M + CAMERA_CREST_ALLOWANCE_PER_HS * this.ocean.significantWaveHeightM;
+      waterBelowCamera === null
+        ? CAMERA_MIN_CLEARANCE_M + CAMERA_CREST_ALLOWANCE_PER_HS * this.ocean.significantWaveHeightM
+        : waterBelowCamera + CAMERA_MIN_CLEARANCE_M;
     this.orbit.update(this.camera, frame.frameSeconds, minAltitude);
 
     this.renderScene(frame);
@@ -286,6 +313,11 @@ export class App {
     const renderTime = this.clock.time + (this.settings.paused ? 0 : frame.alpha * this.clock.stepSeconds);
     this.ocean.encodeSimulation(encoder, renderTime, this.timer.timestampWrites('ocean-sim'));
     this.ocean.prepareDraw(this.camera, { wireframe: this.settings.oceanWireframe });
+    const shipOrigin = this.shipSystem.ship.body.position;
+    this.waterQuery.begin(shipOrigin[0] as number, shipOrigin[2] as number);
+    this.shipSystem.requestWater(this.waterQuery, this.camera.position[0] as number, this.camera.position[2] as number);
+    this.waterQuery.encode(encoder);
+    this.shipSystem.prepareDraw(this.camera.position);
 
     const scenePass = encoder.beginRenderPass({
       label: 'scene',
@@ -301,6 +333,8 @@ export class App {
       timestampWrites: this.timer.timestampWrites('scene'),
     });
     scenePass.setBindGroup(0, this.frameUniforms.bindGroup);
+    // Ship first: the sea behind the hull then fails the depth test early.
+    this.shipSystem.draw(scenePass);
     this.ocean.draw(scenePass);
     if (this.settings.showGrid) {
       this.gridPass.draw(scenePass);
@@ -319,11 +353,20 @@ export class App {
       viewportWidth: width,
       viewportHeight: height,
     });
+    this.debugDraw.begin(this.camera.position);
+    if (this.settings.debugSubmerged || this.settings.debugForces) {
+      this.shipSystem.drawDebug(this.debugDraw, {
+        submerged: this.settings.debugSubmerged,
+        forces: this.settings.debugForces,
+      });
+    }
+    this.debugDraw.encode(encoder, swapchainView);
 
     this.timer.resolve(encoder);
     device.queue.submit([encoder.finish()]);
     this.timer.afterSubmit();
     this.ocean.afterSubmit();
+    this.waterQuery.afterSubmit();
   }
 
   /** Recomputes the sun (and the sky LUTs) only when the sun or the cloud cover changed. */
@@ -352,6 +395,12 @@ export class App {
           windFromDeg: this.wind.fromDirectionRad * RAD_TO_DEG,
           significantWaveHeightM: this.ocean.significantWaveHeightM,
         },
+        ship: {
+          rollDeg: this.shipSystem.ship.rollRad * RAD_TO_DEG,
+          pitchDeg: this.shipSystem.ship.pitchRad * RAD_TO_DEG,
+          headingDeg: this.shipSystem.ship.headingRad * RAD_TO_DEG,
+          speedKnots: this.shipSystem.ship.speedMs / KNOTS_TO_MS,
+        },
         fps: this.fps.rate,
         cpuFrameMs: this.cpuFrameMs.value,
         gpuFrameMs: this.timer.frameMs,
@@ -364,6 +413,27 @@ export class App {
       now,
     );
     this.debugOverlay.update(now, () => this.debugSections());
+  }
+
+  private shipDebugSection(): DebugSection {
+    const ship = this.shipSystem.ship;
+    const model = ship.model;
+    const hs = model.hydrostatics;
+    const b = ship.buoyancy.result;
+    const fmt = (v: number, d = 2): string => v.toFixed(d);
+    return {
+      title: 'Ship',
+      lines: [
+        `${model.config.name}: L=${model.config.hull.lengthM} m, B=${model.config.hull.beamM} m, T=${model.config.hull.designDraftM} m, ` +
+          `m=${fmt(model.config.mass.massKg / 1000, 0)} t, section q=${fmt(model.sectionExponent, 3)}`,
+        `V=${fmt(hs.volumeM3, 1)} m³, KB=${fmt(hs.centreOfBuoyancy[1] + model.config.hull.designDraftM)} m, BM=${fmt(hs.metacentricRadiusM)} m, ` +
+          `GM=${model.config.mass.metacentricHeightM} m, T_roll=${fmt(model.naturalRollPeriodS, 1)} s, T_heave=${fmt(model.naturalHeavePeriodS, 1)} s`,
+        `physics mesh: ${model.physicsMesh.triangleCount} tris, submerged pieces ${ship.buoyancy.submerged.count}, ` +
+          `water from ${this.shipSystem.waterReady ? 'GPU' : 'flat fallback'}`,
+        `draft ${fmt(ship.draftM)} m, displaced ${fmt(b.submergedVolumeM3, 1)} m³, heave v ${fmt(ship.body.velocity[1] as number)} m/s`,
+        `camera water height: ${this.shipSystem.cameraWaterHeight === null ? '–' : `${fmt(this.shipSystem.cameraWaterHeight)} m`}`,
+      ],
+    };
   }
 
   private oceanDebugSection(): DebugSection {
@@ -427,6 +497,7 @@ export class App {
         ],
       },
       this.oceanDebugSection(),
+      this.shipDebugSection(),
       {
         title: 'Camera',
         lines: [
