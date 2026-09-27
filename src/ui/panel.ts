@@ -65,6 +65,11 @@ export class ControlPanel {
       .add(settings, 'cameraReturnDelayS', L.cameraReturnDelayS.min, L.cameraReturnDelayS.max, L.cameraReturnDelayS.step)
       .name('Varsayılana dönüş (s)');
 
+    const effects = this.gui.addFolder('Efektler');
+    effects.add(settings, 'wakeFoam').name('Dümen suyu köpüğü');
+    effects.add(settings, 'spray').name('Sprey');
+    effects.add(settings, 'flag').name('Bayrak');
+
     const sun = this.gui.addFolder('Güneş ve gökyüzü');
     sun
       .add(settings, 'sunElevationDeg', L.sunElevationDeg.min, L.sunElevationDeg.max, L.sunElevationDeg.step)

@@ -63,3 +63,28 @@ describe('debug texture viewer layout', () => {
     });
   });
 });
+
+describe('effect uniform layouts', () => {
+  it('SprayUpdateUniforms matches the TypeScript writer', async () => {
+    const { SPRAY_UPDATE_UNIFORM_OFFSETS, SPRAY_UPDATE_UNIFORM_BYTES } = await import('../src/effects/spray');
+    const sampling = (await import('../src/shaders/oceanSampling.wgsl?raw')).default;
+    const spray = (await import('../src/shaders/spray.wgsl?raw')).default;
+    const frame = computeStructLayout(sampling, 'OceanSamplingFrame');
+    expect(frame.size).toBe(48);
+    // The nested struct is 48 bytes; substitute an equivalent member for the helper.
+    const layout = computeStructLayout(
+      spray.replace('ocean: OceanSamplingFrame,', 'ocean: array<vec4<f32>, 3>,'),
+      'SprayUpdateUniforms',
+    );
+    expect(layout.offsets).toEqual(bytes(SPRAY_UPDATE_UNIFORM_OFFSETS));
+    expect(layout.size).toBe(SPRAY_UPDATE_UNIFORM_BYTES);
+  });
+
+  it('WakeUpdateUniforms has the layout the wake writer assumes', async () => {
+    const wake = (await import('../src/shaders/wake.wgsl?raw')).default;
+    const layout = computeStructLayout(wake, 'WakeUpdateUniforms');
+    // origin (ints 0-3), params (floats 4-7), grid (8-11), segments from float 12, shapes after 16 vec4.
+    expect(layout.offsets).toEqual({ origin: 0, params: 16, grid: 32, segments: 48, shapes: 48 + 16 * 16 });
+    expect(layout.size).toBe(48 + 2 * 16 * 16);
+  });
+});

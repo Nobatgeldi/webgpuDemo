@@ -32,6 +32,10 @@ export interface AppSettings {
   // Camera
   cameraMode: CameraMode;
   cameraReturnDelayS: number;
+  // Effects
+  wakeFoam: boolean;
+  spray: boolean;
+  flag: boolean;
   // Display
   /** Exposure adapts to the sky brightness; exposureEv is then a compensation. */
   autoExposure: boolean;
@@ -84,6 +88,9 @@ export function createDefaultSettings(): AppSettings {
     choppiness: DEFAULT_CHOPPINESS,
     cameraMode: 'follow',
     cameraReturnDelayS: DEFAULT_CAMERA_RETURN_DELAY_S,
+    wakeFoam: true,
+    spray: true,
+    flag: true,
     autoExposure: true,
     exposureEv: 0,
     toneMapper: 'aces',

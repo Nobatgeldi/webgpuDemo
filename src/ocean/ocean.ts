@@ -8,7 +8,7 @@ import {
   type CascadeBand,
   type OceanQualityConfig,
 } from './oceanConfig';
-import { OceanRenderer, SLOPE_TABLE_SIZE } from './oceanPass';
+import { OceanRenderer, SLOPE_TABLE_SIZE, type SurfaceOverlay } from './oceanPass';
 import { WaterQuery } from './waterQuery';
 import {
   bandSignificantWaveHeight,
@@ -124,11 +124,12 @@ export class Ocean {
     frameUniforms: FrameUniforms,
     preset: QualityPreset,
     seed: number,
+    overlay: SurfaceOverlay,
   ): Promise<Ocean> {
     const quality = OCEAN_QUALITY[preset];
     const bands = computeCascadeBands(quality.fftSize, quality.cascadeCount);
     const cascades = await OceanCascades.create(device, quality.fftSize, bands, seed);
-    const renderer = await OceanRenderer.create(device, frameUniforms, cascades, quality);
+    const renderer = await OceanRenderer.create(device, frameUniforms, cascades, quality, overlay);
     return new Ocean(quality, cascades, renderer);
   }
 
@@ -213,6 +214,11 @@ export class Ocean {
   /** Creates a water height query service on this ocean's textures. */
   createWaterQuery(device: GPUDevice, capacity: number): Promise<WaterQuery> {
     return WaterQuery.create(device, this.cascades, capacity);
+  }
+
+  /** Displacement texture array and cascade patch sizes, for compute passes that sample the surface. */
+  get displacementField(): { readonly texture: GPUTexture; readonly patchSizes: readonly number[] } {
+    return { texture: this.cascades.displacement, patchSizes: this.cascades.bands.map((band) => band.patchSizeM) };
   }
 
   /** GPU textures for the debug texture viewer. */

@@ -23,6 +23,8 @@ import { SkyPass } from './sky/skyPass';
 import { DebugTextureView } from './render/debugTextureView';
 import { DebugDraw } from './render/debugDraw';
 import { ShipSystem } from './ship/shipSystem';
+import { ShipEffects } from './effects/shipEffects';
+import { WakeFoam } from './effects/wake';
 import { KNOTS_TO_MS, PATROL_BOAT } from './ship/shipConfig';
 import type { WaterQuery } from './ocean/waterQuery';
 import { DebugOverlay, type DebugSection } from './ui/debugOverlay';
@@ -84,6 +86,7 @@ export interface AppOptions {
 
 interface AppPasses {
   readonly shipSystem: ShipSystem;
+  readonly effects: ShipEffects;
   readonly waterQuery: WaterQuery;
   readonly debugDraw: DebugDraw;
   readonly atmosphere: Atmosphere;
@@ -131,6 +134,7 @@ export class App {
   private readonly atmosphere: Atmosphere;
   private readonly debugTextureView: DebugTextureView;
   private readonly shipSystem: ShipSystem;
+  private readonly effects: ShipEffects;
   private readonly waterQuery: WaterQuery;
   private readonly debugDraw: DebugDraw;
 
@@ -148,6 +152,7 @@ export class App {
     this.atmosphere = passes.atmosphere;
     this.debugTextureView = passes.debugTextureView;
     this.shipSystem = passes.shipSystem;
+    this.effects = passes.effects;
     this.waterQuery = passes.waterQuery;
     this.debugDraw = passes.debugDraw;
     this.settings = createDefaultSettings();
@@ -194,16 +199,21 @@ export class App {
     const atmosphere = await Atmosphere.create(device);
     const frameUniforms = new FrameUniforms(device, atmosphere);
     const { quality, seed } = options.launch;
+    // The ocean shader samples the wake foam, so the wake exists first.
+    const wake = await WakeFoam.create(device);
     // Pipelines compile in parallel.
     const [skyPass, gridPass, tonemapPass, ocean, shipSystem, debugDraw] = await Promise.all([
       SkyPass.create(device, frameUniforms),
       GridPass.create(device, frameUniforms),
       TonemapPass.create(device, canvasFormat, atmosphere.skyLightBuffer),
-      Ocean.create(device, frameUniforms, quality, seed),
+      Ocean.create(device, frameUniforms, quality, seed, wake),
       ShipSystem.create(device, frameUniforms, PATROL_BOAT),
       DebugDraw.create(device, frameUniforms, canvasFormat),
     ]);
-    const waterQuery = await ocean.createWaterQuery(device, WATER_QUERY_CAPACITY);
+    const [waterQuery, effects] = await Promise.all([
+      ocean.createWaterQuery(device, WATER_QUERY_CAPACITY),
+      ShipEffects.create(device, frameUniforms, shipSystem, wake, ocean.displacementField),
+    ]);
     const oceanTextures = ocean.debugTextures;
     const debugTextureView = await DebugTextureView.create(device, canvasFormat, {
       spectrum: oceanTextures.spectrum,
@@ -215,6 +225,7 @@ export class App {
     });
     return new App(options, {
       shipSystem,
+      effects,
       waterQuery,
       debugDraw,
       atmosphere,
@@ -249,7 +260,10 @@ export class App {
       },
       this.clock.stepSeconds,
     );
+    this.shipSystem.ship.setWind(this.wind.speedMs, this.wind.fromDirectionRad);
+    this.effects.setWind(this.wind.speedMs, this.wind.fromDirectionRad);
     this.shipSystem.step(this.clock.stepSeconds, this.clock.time);
+    this.effects.step(this.clock.stepSeconds, this.clock.time);
     this.clock.advance();
     this.wind.setTarget(this.settings.windSpeedMs, this.settings.windDirectionDeg * DEG_TO_RAD);
     this.wind.step(this.clock.stepSeconds);
@@ -347,7 +361,13 @@ export class App {
     this.waterQuery.begin(shipOrigin[0] as number, shipOrigin[2] as number);
     this.shipSystem.requestWater(this.waterQuery, this.camera.position[0] as number, this.camera.position[2] as number);
     this.waterQuery.encode(encoder);
+    this.effects.setToggles({ wake: this.settings.wakeFoam, spray: this.settings.spray, flag: this.settings.flag });
+    this.effects.encode(encoder, renderTime, this.settings.paused ? 0 : frame.frameSeconds, {
+      wake: this.timer.timestampWrites('wake'),
+      spray: this.timer.timestampWrites('spray'),
+    });
     this.shipSystem.prepareDraw(this.camera.position);
+    this.effects.prepareDraw(this.camera.position);
 
     const scenePass = encoder.beginRenderPass({
       label: 'scene',
@@ -365,12 +385,15 @@ export class App {
     scenePass.setBindGroup(0, this.frameUniforms.bindGroup);
     // Ship first: the sea behind the hull then fails the depth test early.
     this.shipSystem.draw(scenePass);
+    this.effects.drawOpaque(scenePass);
     this.ocean.draw(scenePass);
     if (this.settings.showGrid) {
       this.gridPass.draw(scenePass);
     }
     // Sky last: it only shades pixels left at the far plane.
     this.skyPass.draw(scenePass);
+    // Blended spray after everything opaque, including the sky.
+    this.effects.drawTransparent(scenePass);
     scenePass.end();
 
     const swapchainView = canvasContext.getCurrentTexture().createView({ label: 'swapchain' });
@@ -438,6 +461,8 @@ export class App {
           rudderOrderDeg: ship.helm.rudderOrderRad * RAD_TO_DEG,
           rudderAngleDeg: ship.propulsion.state.rudderAngleRad * RAD_TO_DEG,
           maxRudderDeg: config.rudder.maxAngleRad * RAD_TO_DEG,
+          apparentWindMs: ship.windLoad.state.apparentSpeedMs,
+          apparentWindFromRelativeDeg: ship.windLoad.state.apparentFromRelativeRad * RAD_TO_DEG,
         },
         cameraModeLabel: CAMERA_MODE_LABELS[this.shipCamera.mode],
         fps: this.fps.rate,
@@ -460,6 +485,8 @@ export class App {
     const hs = model.hydrostatics;
     const b = ship.buoyancy.result;
     const prop = ship.propulsion.state;
+    const wind = ship.windLoad.state;
+    const sources = this.effects.sources;
     const fmt = (v: number, d = 2): string => v.toFixed(d);
     return {
       title: 'Ship',
@@ -477,6 +504,12 @@ export class App {
           `AoA ${fmt(prop.rudderAngleOfAttackRad * RAD_TO_DEG, 1)}°, side force ${fmt(prop.rudderSideForceN / 1000, 1)} kN`,
         `resistance: residuary ${fmt(ship.hydrodynamics.totals.residuaryN / 1000, 1)} kN, surge ${fmt(ship.surgeSpeedMs)} m/s, ` +
           `calibration T0 ${fmt(model.propeller.bollardThrustN / 1000, 0)} kN, Vref ${fmt(model.propeller.referenceSpeedMs)} m/s`,
+        `wind load: apparent ${fmt(wind.apparentSpeedMs, 1)} m/s from ${fmt(wind.apparentFromRelativeRad * RAD_TO_DEG, 0)}° rel., ` +
+          `surge ${fmt(wind.surgeForceN / 1000, 1)} kN, sway ${fmt(wind.swayForceN / 1000, 1)} kN ` +
+          `(A_L ${fmt(model.windage.lateralAreaM2, 0)} m², A_F ${fmt(model.windage.frontalAreaM2, 0)} m², ` +
+          `CE ${fmt(model.windage.lateralCentre[1], 1)} m above WL)`,
+        `effects: Fn ${fmt(sources.froude)}, bow entry ${fmt(sources.bowEntrySpeedMs)} m/s, thrust ${fmt(sources.thrustFraction * 100, 0)} % of bollard, ` +
+          `spray spawned ${this.effects.spray.spawnedTotal}, flag rel. wind ${fmt(this.effects.cloth.relativeWindMs, 1)} m/s`,
         `camera water height: ${this.shipSystem.cameraWaterHeight === null ? '–' : `${fmt(this.shipSystem.cameraWaterHeight)} m`}`,
       ],
     };

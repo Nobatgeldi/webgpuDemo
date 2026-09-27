@@ -50,6 +50,9 @@ export interface HudShipState {
   readonly rudderOrderDeg: number;
   readonly rudderAngleDeg: number;
   readonly maxRudderDeg: number;
+  /** Apparent wind on the ship (true wind minus ship velocity) and where it comes from relative to the bow. */
+  readonly apparentWindMs: number;
+  readonly apparentWindFromRelativeDeg: number;
 }
 
 export interface HudStats {
@@ -75,6 +78,7 @@ type HudField =
   | 'attitude'
   | 'wind'
   | 'relativeWind'
+  | 'apparentWind'
   | 'hs'
   | 'camera'
   | 'fps'
@@ -183,6 +187,7 @@ export class Hud {
       attitude: this.addRow('Yalpa / baş-kıç'),
       wind: this.addRow('Rüzgâr'),
       relativeWind: this.addRow('Bağıl rüzgâr (geldiği)'),
+      apparentWind: this.addRow('Görünür rüzgâr'),
       hs: this.addRow('Belirgin dalga yük. Hs'),
       camera: this.addRow('Kamera'),
       fps: this.addRow('FPS'),
@@ -238,6 +243,10 @@ export class Hud {
     const target = sea.targetWindSpeedMs === null ? '' : ` → ${sea.targetWindSpeedMs.toFixed(1)}`;
     this.fields.wind.textContent = `Bf ${sea.beaufort} · ${sea.windSpeedMs.toFixed(1)}${target} m/s · ${Math.round(sea.windFromDeg) % 360}°`;
     this.fields.relativeWind.textContent = relativeWindText(sea.windFromDeg, ship.headingDeg);
+    this.fields.apparentWind.textContent =
+      ship.apparentWindMs < 0.05
+        ? '–'
+        : `${ship.apparentWindMs.toFixed(1)} m/s · ${relativeWindText(ship.apparentWindFromRelativeDeg, 0)}`;
     this.fields.hs.textContent = `${sea.significantWaveHeightM.toFixed(2)} m`;
     this.fields.camera.textContent = stats.cameraModeLabel;
     this.fields.fps.textContent = stats.fps.toFixed(0);

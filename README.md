@@ -69,13 +69,14 @@ Ayar panelindeki **Rüzgâr ve deniz** bölümünde Beaufort (0–12) ve m/s (0�
 kaydırıcıları birbirine senkrondur; rüzgâr yönü, fetch ve dalga keskinliği
 (choppiness) de buradan ayarlanır. **Kamera** bölümünde mod ve takip kamerasının
 son girdiden kaç saniye sonra varsayılan açıya döneceği (varsayılan 3 s)
-seçilir.
+seçilir. **Efektler** bölümünden dümen suyu köpüğü, sprey ve bayrak ayrı ayrı
+kapatılabilir.
 
 HUD: gemi yukarı pusula (K/D/G/B; mavi ok rüzgârın *geldiği* yönü gemiye göre
 gösterir), gaz kolu çubuğu (sarı = tornistan), dümen göstergesi (üçgen = emir,
 sarı çizgi = gerçek dümen açısı), hız (kn), rota, makine (% ve d/dk), dümen,
-yalpa/baş-kıç, rüzgâr (Bf, m/s, yön), bağıl rüzgâr, Hs, kamera modu, FPS ve GPU
-süresi.
+yalpa/baş-kıç, rüzgâr (Bf, m/s, yön), bağıl rüzgâr, görünür rüzgâr (gemide
+hissedilen: gerçek rüzgâr − gemi hızı), Hs, kamera modu, FPS ve GPU süresi.
 
 ## URL parametreleri
 
@@ -115,12 +116,15 @@ src/
   ship/              shipConfig, hull (parametrik gövde), hydrostatics, rigidBody (6DOF),
                      buoyancy (Kerner üçgen kesme), hydrodynamics (ITTC-1957, dalga
                      direnci, sönüm), propulsion (pervane + dümen), helm (gaz kolu/dümen emri),
+                     wind (rüzgâr yükü, rüzgâr alanları),
                      waterHeightProvider (arayüz + analitik su), waterGrid (GPU su ızgarası),
                      ship, shipMesh/shipRenderer (görsel model), shipSystem (birleştirici)
   ocean/             beaufort, spectrumModel (JONSWAP + Donelan-Banner, CPU referansı),
                      windState, fftReference, spectrum/fft/cascades (GPU simülasyonu),
                      oceanMesh (clipmap), oceanPass (çizim), ocean (birleştirici)
   camera/            shipCamera (takip / serbest yörünge / köprüüstü)
+  effects/           shipEffectSources (köpük/sprey kaynakları), wake (dümen suyu köpüğü),
+                     spray (GPU parçacıkları), flagCloth + flagRenderer (bayrak), shipEffects
   input/             klavye/fare durumu
   ui/                panel (lil-gui), hud, debugOverlay, errorScreen
   shaders/           *.wgsl (Vite ?raw ile içe aktarılır)
@@ -285,10 +289,48 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
   tornistana geçerken sıfırda durur (tuş bırakılıp yeniden basılmalı). Dümen
   emri 20°/s hızla değişir; gerçek dümen açısı dümen makinesinin 5°/s hızıyla
   emri izler.
+- **Rüzgâr yükü:** Bağıl rüzgâr (gerçek rüzgâr − gemi noktasının hızı) gemi
+  eksenlerine ayrılır; F = ½·ρ_hava·C_d·A·v|v| (ρ_hava = 1.225 kg/m³), boyuna
+  bileşen ön alana (C_d = 0.8), enine bileşen yan alana (C_d = 1.0) etkir.
+  Alanlar gövde formu ve üst yapıdan silüet rasterleştirmesiyle hesaplanır
+  (yan ≈ 214 m², ön ≈ 60 m²); kuvvetler alan merkezlerinde (yan alan merkezi
+  su hattının ≈ 2.6 m üstünde) uygulanır, bu yüzden yan rüzgâr gemiyi hem
+  sürükler hem rüzgâr altına yatırır (Bf 8 bordadan ≈ 1.4°, 28 m/s'de ≈ 3°).
+  Rüzgâr hızı yükseklikle U(z) = U10·(z/10)^0.11 profiline göre değişir
+  (açık deniz, nötr atmosfer). Yüzey akıntısı (~%3 U10) modellenmedi.
 - **Su ızgarası:** Gemi çevresinde 8 m pay, 40 × 16 örnek (~1.7 m aralık); daha
   kısa dalgalar yüzerlikte ortalanır.
 - **Güverte kapalıdır:** Fizik ve görsel gövde kapalı olduğundan gövde içinde su
   görünmez; ayrı bir stencil maskesi gerekmedi.
+
+### Efektler
+- **Dümen suyu köpüğü:** Gemiyle kayan 512 m × 512 m'lik (1024², 0.5 m hücre)
+  bir köpük alanı; doku toroidal adreslenir, pencere kayarken kopyalama
+  gerekmez. Her karede difüzyon (türbülanslı iz genişler, D = 1.5 m²/s), üstel
+  sönüm (45 s) ve kaynakların bu karede katettiği yol boyunca köpük eklenir
+  (kare hızından bağımsız, boşluksuz iz). İkinci kanal "taze köpük" (6 s):
+  taze köpük yoğun beyaz, yaşlanan köpük yalnızca dalgaların sıkıştığı yerlerde
+  şerit ve lekeler halinde kalır. Kaynaklar: pervane akımı (itki ile orantılı),
+  kıç türbülanslı izi (Froude 0.05–0.3 arasında gelişir), gövde yanlarında baş
+  dalgasının kırılması (Froude 0.2–0.45) ve baş vurmada (slamming) ek köpük.
+  Kaynak şiddetleri, gemi geçtikten sonra suda kalan köpük miktarı olarak
+  tanımlanır; bu yüzden hızdan bağımsızdır. Köpük dalgalarla birlikte hareket
+  eder (yer değiştirmemiş yüzey koordinatında örneklenir) ve pencere kenarına
+  doğru 60 m'de söner.
+- **Sprey:** 16 384 parçacıklı GPU halka tamponu. Baş dalgası spreyi Froude
+  0.3–0.55 arasında gelişir (tam gelişmişken 1200 parçacık/s); baş vurma spreyi
+  baş bölgesinin suya giriş hızı 1.5 m/s'yi aşınca (hız farkının karesiyle)
+  fırlatılır. Giriş hızı, dalga yüksekliği ile baş noktasının yüksekliği
+  arasındaki farkın zamana göre türevidir. Damlacıklar yerçekimi ve rüzgâra
+  doğru sürüklenmeyle (0.4–2.5 s gevşeme süresi) hareket eder, su yüzeyine
+  (GPU dalga alanından) değince ölür; güneş ışığını ileri saçan yumuşak
+  sprite'larla çizilir.
+- **Bayrak:** 16 × 11 düğümlü kumaş (Verlet + konum tabanlı mesafe kısıtları;
+  zayıf kayma ve eğilme direnci), 1.0 m × 1.5 m, 0.17 kg/m². Her üçgene bağıl
+  rüzgârdan normal basınç (C_n = 1.2) ve küçük sürtünme etkir; rüzgâra
+  ±%12'lik türbülans eklenir. Gönder direğin kıç yüzünde, direk tepesinin
+  0.1 m altında. Bayrak Türk bayrağıdır ve TS 3771'deki ölçülerle prosedürel
+  olarak çizilir.
 
 ### Görüntü
 
@@ -315,7 +357,14 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 
 ## Bilinen sınırlamalar
 
-- Gemiye rüzgâr kuvveti, dümen suyu izi ve sprey henüz yok (Faz 5).
+- Baş dalgası ve Kelvin dalga deseni geometri olarak yoktur; yalnızca beyaz
+  su (köpük ve sprey) olarak görünür. Dümen suyu köpük penceresi 512 m'dir;
+  daha uzaktaki iz kenarda söner.
+- Rüzgâr kaynaklı yüzey akıntısı yok. Rüzgâr yükü basit sürükleme katsayılarıyla
+  hesaplanır (Isherwood tipi yöne bağlı katsayılar yok); sürüklenme hızı, gövde
+  yanal sönümü güçlü olduğundan gerçek gemilere göre düşüktür (28 m/s rüzgârda ~0.3 m/s).
+- Bayrak direkle çarpışmaz: kıçtan esen rüzgârda direğin içinden geçebilir.
+- Sprey parçacıkları köpük bırakmaz ve birbirini gölgelemez.
 - Manevra modeli yarı-deneyseldir: gövdenin yanal kaldırma kuvveti (Munk
   momenti, çapraz akış) ayrı olarak modellenmez, panel sönümünden gelir; dönüş
   çapı hedef aralığın (3–5 L) üst kısmında, tek pervane dönme yönü (propeller walk)

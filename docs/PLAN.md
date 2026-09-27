@@ -81,13 +81,16 @@ src/ship/
   propulsion.ts          pervane (RPM gecikmesi, itki) + dümen (C_L, stall, propwash) (4)
   helm.ts                gaz kolu ve dümen emri (tuş hızı, sıfır tırnağı)      (4)
 src/core/spring.ts       kritik sönümlü yay (tam çözüm), açı sarma             (4)
-  wind.ts                bağıl rüzgâr kuvveti ve momenti                       (5)
+  wind.ts                bağıl rüzgâr yükü, silüetten rüzgâr alanları          (5)
 src/camera/
   shipCamera.ts          takip / serbest orbit / köprüüstü modları (F0 orbitCamera'nın yerini aldı) (4)
 src/effects/
-  wake.ts                dümen suyu köpük izi (gemi merkezli kayan doku)       (5)
+  shipEffectSources.ts   köpük/sprey kaynakları (Froude, itki, baş giriş hızı)  (5)
+  wake.ts                dümen suyu köpük izi (gemi merkezli toroidal doku)    (5)
   spray.ts               baş dalgası/sprey compute parçacıkları                (5)
-  flag.ts                Verlet kumaş bayrak (bağıl rüzgâr)                    (5)
+  flagCloth.ts           Verlet/PBD kumaş bayrak (bağıl rüzgâr)                (5)
+  flagRenderer.ts        bayrak çizimi (prosedürel Türk bayrağı)               (5)
+  shipEffects.ts         efektleri birleştiren sınıf                           (5)
 src/input/input.ts                                                            (0)
 src/ui/ panel.ts, hud.ts, debugOverlay.ts, errorScreen.ts                    (0+)
 src/shaders/*.wgsl       her geçişin WGSL kaynağı (?raw import)                (0+)
@@ -144,10 +147,10 @@ dümen (±35°, ~5°/s, C_L(α) + stall, propwash), klavye kontrolleri,
 third-person kamera (kritik sönümlü yaw takibi, hafif yalpa yansıtma, 3 s sonra
 varsayılana dönüş, su ve gövde çarpışması), köprüüstü kamerası, tam HUD.
 
-### Faz 5 — Rüzgâr etkileri ve detay
+### Faz 5 — Rüzgâr etkileri ve detay ✅
 Gemiye bağıl rüzgâr kuvveti (heel + sürüklenme; test: yan rüzgârda rüzgâr
-altına yatma), opsiyonel rüzgâr akıntısı (~%3 U10), dümen suyu köpük izi,
-baş dalgası/sprey compute parçacıkları, bayrak.
+altına yatma), dümen suyu köpük izi, baş dalgası/sprey compute parçacıkları,
+bayrak. Opsiyonel rüzgâr akıntısı (~%3 U10) yapılmadı.
 
 ### Faz 6 — Cilalama
 Kalite ön ayarları (FFT 128/256/512, kaskad sayısı, LOD halka sayısı),

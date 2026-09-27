@@ -26,6 +26,12 @@ import tonemapWgsl from './tonemap.wgsl?raw';
 import waterQueryWgsl from './waterQuery.wgsl?raw';
 import shipWgsl from './ship.wgsl?raw';
 import debugDrawWgsl from './debugDraw.wgsl?raw';
+import wakeWgsl from './wake.wgsl?raw';
+import oceanSamplingWgsl from './oceanSampling.wgsl?raw';
+import sprayWgsl from './spray.wgsl?raw';
+import flagWgsl from './flag.wgsl?raw';
+import sprayCommonWgsl from './sprayCommon.wgsl?raw';
+import sprayRenderWgsl from './sprayRender.wgsl?raw';
 
 const chunk = (label: string, code: string): WgslChunk => ({ label, code });
 
@@ -53,6 +59,12 @@ export const WGSL = {
   waterQuery: chunk('waterQuery.wgsl', waterQueryWgsl),
   ship: chunk('ship.wgsl', shipWgsl),
   debugDraw: chunk('debugDraw.wgsl', debugDrawWgsl),
+  wake: chunk('wake.wgsl', wakeWgsl),
+  oceanSampling: chunk('oceanSampling.wgsl', oceanSamplingWgsl),
+  spray: chunk('spray.wgsl', sprayWgsl),
+  flag: chunk('flag.wgsl', flagWgsl),
+  sprayCommon: chunk('sprayCommon.wgsl', sprayCommonWgsl),
+  sprayRender: chunk('sprayRender.wgsl', sprayRenderWgsl),
 } as const;
 
 /** Chunks every scene shader starts with: frame resources, helpers and sky lookups. */

@@ -17,6 +17,7 @@ const TYPE_LAYOUTS: Record<string, TypeLayout> = {
   'vec3<f32>': { align: 16, size: 12 },
   'vec4<f32>': { align: 16, size: 16 },
   'vec4<u32>': { align: 16, size: 16 },
+  'vec4<i32>': { align: 16, size: 16 },
   'mat4x4<f32>': { align: 16, size: 64 },
 };
 

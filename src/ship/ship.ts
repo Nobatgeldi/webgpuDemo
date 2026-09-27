@@ -12,6 +12,7 @@ import { Helm } from './helm';
 import { Propulsion, calibratePropeller, type PropellerCalibration } from './propulsion';
 import type { ShipConfig } from './shipConfig';
 import type { WaterHeightProvider } from './waterHeightProvider';
+import { WindLoad, computeWindage, windVelocity, type Windage } from './wind';
 
 export interface ShipModel {
   readonly config: ShipConfig;
@@ -32,6 +33,8 @@ export interface ShipModel {
   /** Undamped natural heave period estimate 2 pi sqrt(m / (rho g A_wp)) (s). */
   readonly naturalHeavePeriodS: number;
   readonly propeller: PropellerCalibration;
+  /** Above-water projected areas for the wind load. */
+  readonly windage: Windage;
 }
 
 export function buildShipModel(config: ShipConfig): ShipModel {
@@ -99,6 +102,7 @@ export function buildShipModel(config: ShipConfig): ShipModel {
     naturalRollPeriodS: 2 * Math.PI * Math.sqrt(rollInertia / rollStiffness),
     naturalHeavePeriodS: 2 * Math.PI * Math.sqrt(m / heaveStiffness),
     propeller: calibratePropeller(config.propulsion, config.maxSpeedKnots, coefficients),
+    windage: computeWindage(config),
   };
 }
 
@@ -122,6 +126,10 @@ export class Ship {
   readonly propulsion: Propulsion;
   /** Current helm orders (throttle lever and ordered rudder angle). */
   readonly helm: Helm;
+  readonly windLoad: WindLoad;
+  /** True 10 m wind velocity over the sea, world x and z (m/s). */
+  private windX = 0;
+  private windZ = 0;
   private readonly scratch = new Float64Array(3);
   private readonly axis = new Float64Array(3);
 
@@ -139,7 +147,13 @@ export class Ship {
       model.propeller,
       model.centreOfGravity,
     );
+    this.windLoad = new WindLoad(model.windage, model.config.windage, model.centreOfGravity);
     this.place(placement);
+  }
+
+  /** Sets the true wind (10 m speed, direction it blows FROM, clockwise from north). */
+  setWind(speedMs: number, fromRad: number): void {
+    [this.windX, this.windZ] = windVelocity(speedMs, fromRad);
   }
 
   /** Puts the ship at rest in the given pose. */
@@ -173,6 +187,7 @@ export class Ship {
     this.buoyancy.apply(body, water, timeS);
     this.hydrodynamics.apply(body, this.buoyancy.submerged);
     this.propulsion.apply(body, this.helm, water, timeS, dt);
+    this.windLoad.apply(body, this.windX, this.windZ);
     body.integrate(dt);
   }
 

@@ -65,7 +65,7 @@ export class WaterQuery {
   }
 
   static async create(device: GPUDevice, cascades: OceanCascades, capacity: number): Promise<WaterQuery> {
-    const module = await createShaderModule(device, composeWgsl('water-query', [WGSL.waterQuery]));
+    const module = await createShaderModule(device, composeWgsl('water-query', [WGSL.oceanSampling, WGSL.waterQuery]));
     const C = GPUShaderStage.COMPUTE;
     const layout = device.createBindGroupLayout({
       label: 'water-query',

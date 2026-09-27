@@ -8,3 +8,6 @@ export const SEA_WATER_DENSITY_KG_M3 = 1025;
 
 /** Kinematic viscosity of sea water at 15 °C (m^2/s), ITTC. */
 export const SEA_WATER_KINEMATIC_VISCOSITY_M2_S = 1.19e-6;
+
+/** Density of air at sea level, 15 °C (kg/m^3), ISA. */
+export const AIR_DENSITY_KG_M3 = 1.225;

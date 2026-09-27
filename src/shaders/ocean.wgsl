@@ -21,6 +21,16 @@ const SSS_CREST_FRACTION_OF_HS: f32 = 0.5;
 const FOAM_ALBEDO: f32 = 0.75;
 // Foam amount mapped to coverage: soft onset, full at 1.
 const FOAM_COVERAGE_START: f32 = 0.15;
+// Wake foam: fresh foam covers from this amount on; aged foam needs more
+// (plus wave convergence) and so survives only as streaks and patches.
+const WAKE_FRESH_THRESHOLD: f32 = 0.2;
+// How much fresh foam ignores the wave convergence (1 = uniformly white).
+const WAKE_FRESH_UNIFORMITY: f32 = 0.7;
+const WAKE_AGED_THRESHOLD: f32 = 0.55;
+const WAKE_COVERAGE_WIDTH: f32 = 0.35;
+// Weight of the wave convergence (surface compression) in breaking up aged wake foam.
+const WAKE_DETAIL_BASE: f32 = 0.3;
+const WAKE_DETAIL_GAIN: f32 = 1.4;
 // Foam gathers where the smallest waves converge (compressed surface), which
 // breaks the texel-sized foam patches of the long cascades into filaments:
 // amount *= BASE + GAIN * saturate(0.5 - SCALE * (dDx/dx + dDz/dz) of the finest cascade).
@@ -67,6 +77,35 @@ struct OceanLevel {
 @group(1) @binding(4) var oceanSampler: sampler;
 @group(1) @binding(5) var foamTexture: texture_2d_array<f32>;
 
+// Wake foam around the ship (effects/wake.ts): toroidally addressed window.
+struct WakeSampleUniforms {
+  // xy: camera world XZ wrapped by the window size (m), z: window size (m)
+  wrap: vec4<f32>,
+  // xy: window lower corner relative to the camera (m), z: edge fade distance (m), w: enabled (0/1)
+  window: vec4<f32>,
+}
+
+@group(2) @binding(0) var<uniform> wakeSample: WakeSampleUniforms;
+@group(2) @binding(1) var wakeTexture: texture_2d<f32>;
+@group(2) @binding(2) var wakeSampler: sampler;
+
+// Wake foam (x: amount, y: fresh amount) at an undisplaced surface point
+// (camera-relative XZ), so the foam rides on the waves.
+fn wakeFoam(relativeXZ: vec2<f32>) -> vec2<f32> {
+  if (wakeSample.window.w < 0.5) {
+    return vec2<f32>(0.0);
+  }
+  let size = wakeSample.wrap.z;
+  let local = relativeXZ - wakeSample.window.xy;
+  let edge = min(min(local.x, local.y), min(size - local.x, size - local.y));
+  let fade = saturate(edge / wakeSample.window.z);
+  if (fade <= 0.0) {
+    return vec2<f32>(0.0);
+  }
+  let uv = (wakeSample.wrap.xy + relativeXZ) / size;
+  return textureSampleLevel(wakeTexture, wakeSampler, uv, 0.0).xy * fade;
+}
+
 struct OceanVertexInput {
   // xy: grid position in cells relative to the level centre, z: 1 for far skirt vertices
   @location(0) grid: vec3<f32>,
@@ -82,6 +121,8 @@ struct OceanVertexOutput {
   @location(2) uv2: vec2<f32>,
   // xy: grid position in cells, z: level (for the wireframe view)
   @location(3) grid: vec3<f32>,
+  // Undisplaced surface position relative to the camera (XZ, m).
+  @location(4) undisplaced: vec2<f32>,
 }
 
 fn cascadeOrigin(level: OceanLevel, cascade: u32) -> vec2<f32> {
@@ -147,6 +188,7 @@ fn vsMain(input: OceanVertexInput) -> OceanVertexOutput {
   output.uv01 = vec4<f32>(uv[0], uv[1]);
   output.uv2 = uv[2];
   output.grid = vec3<f32>(input.grid.xy, f32(input.level));
+  output.undisplaced = relativeXZ;
   return output;
 }
 
@@ -243,7 +285,14 @@ fn fsMain(input: OceanVertexOutput) -> @location(0) vec4<f32> {
     foamAmount += textureSample(foamTexture, oceanSampler, input.uv01.zw, 1).x;
   }
   let detail = saturate(0.5 - FOAM_DETAIL_SCALE * (finest.z + finest.w));
-  let coverage = smoothstep(FOAM_COVERAGE_START, 1.0, foamAmount * (FOAM_DETAIL_BASE + FOAM_DETAIL_GAIN * detail));
+  var coverage = smoothstep(FOAM_COVERAGE_START, 1.0, foamAmount * (FOAM_DETAIL_BASE + FOAM_DETAIL_GAIN * detail));
+  let wake = wakeFoam(input.undisplaced);
+  if (wake.x > 0.0) {
+    let freshness = saturate(wake.y / wake.x);
+    let threshold = mix(WAKE_AGED_THRESHOLD, WAKE_FRESH_THRESHOLD, freshness);
+    let amount = wake.x * mix(WAKE_DETAIL_BASE + WAKE_DETAIL_GAIN * detail, 1.0, WAKE_FRESH_UNIFORMITY * freshness);
+    coverage = max(coverage, smoothstep(threshold, threshold + WAKE_COVERAGE_WIDTH, amount));
+  }
   let foamRadiance = FOAM_ALBEDO * (sunIrradiance * saturate(dot(n, sunDir)) + skyIrradiance()) / PI;
   color = mix(color, foamRadiance, coverage);
   color += sunSpecular * mix(1.0, FOAM_SPECULAR_SCALE, coverage);

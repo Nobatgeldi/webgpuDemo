@@ -24,7 +24,7 @@ export interface ShipVisualMesh {
   readonly indices: Uint32Array;
 }
 
-interface Box {
+export interface Box {
   readonly min: readonly [number, number, number];
   readonly max: readonly [number, number, number];
   readonly material: ShipMaterial;
@@ -42,8 +42,19 @@ export function bridgeEyePosition(config: ShipConfig): [number, number, number] 
   return [BRIDGE_EYE_X_M * s, hullSection(config.hull, 0).deckHeightM + BRIDGE_EYE_ABOVE_DECK_M, 0];
 }
 
+/** Flag halyard on the aft face of the mast: hoist from 0.1 m below the masthead. */
+const FLAG_HALYARD_X_M = 1.75;
+const FLAG_TOP_ABOVE_DECK_M = 12.4;
+
+/** Bottom and top of the flag's hoist edge in the hull frame, for a flag of the given hoist (m). */
+export function flagHoistPosition(config: ShipConfig, hoistM: number): { bottom: [number, number, number]; top: [number, number, number] } {
+  const s = config.hull.lengthM / LAYOUT_REFERENCE_LENGTH_M;
+  const top = hullSection(config.hull, 0).deckHeightM + FLAG_TOP_ABOVE_DECK_M;
+  return { bottom: [FLAG_HALYARD_X_M * s, top - hoistM, 0], top: [FLAG_HALYARD_X_M * s, top, 0] };
+}
+
 /** Superstructure layout relative to the hull length/breadth (hull frame, metres for a 50 m hull). */
-function superstructure(config: ShipConfig): Box[] {
+export function superstructure(config: ShipConfig): Box[] {
   const { lengthM: l, beamM: b } = config.hull;
   const deck = hullSection(config.hull, 0).deckHeightM;
   const s = l / LAYOUT_REFERENCE_LENGTH_M;

@@ -48,6 +48,12 @@ const OCEAN_FOG_DISTANCE_M = 25_000;
 /** Anisotropic filtering of the wave textures at grazing angles. */
 const OCEAN_MAX_ANISOTROPY = 8;
 
+/** Extra surface data sampled by the ocean shader as @group(2) (the ship's wake foam). */
+export interface SurfaceOverlay {
+  readonly sampleLayout: GPUBindGroupLayout;
+  readonly sampleBindGroup: GPUBindGroup;
+}
+
 export interface OceanRenderParameters {
   readonly wireframe: boolean;
   readonly significantWaveHeightM: number;
@@ -78,6 +84,7 @@ export class OceanRenderer {
     private readonly geometry: ReturnType<typeof buildOceanGeometry>,
     private readonly config: OceanQualityConfig,
     private readonly patchSizes: readonly number[],
+    private readonly overlay: SurfaceOverlay,
   ) {
     this.levelData = new Float32Array(config.meshLevels * LEVEL_FLOATS);
     this.uniformData = uniformData;
@@ -88,6 +95,7 @@ export class OceanRenderer {
     frameUniforms: FrameUniforms,
     cascades: OceanCascades,
     config: OceanQualityConfig,
+    overlay: SurfaceOverlay,
   ): Promise<OceanRenderer> {
     const geometry = buildOceanGeometry(config.meshHalfCells);
     const vertexBuffer = device.createBuffer({
@@ -177,7 +185,7 @@ export class OceanRenderer {
       label: 'ocean',
       layout: device.createPipelineLayout({
         label: 'ocean',
-        bindGroupLayouts: [frameUniforms.bindGroupLayout, layout],
+        bindGroupLayouts: [frameUniforms.bindGroupLayout, layout, overlay.sampleLayout],
       }),
       vertex: {
         module,
@@ -211,6 +219,7 @@ export class OceanRenderer {
       geometry,
       config,
       patchSizes,
+      overlay,
     );
   }
 
@@ -263,6 +272,7 @@ export class OceanRenderer {
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(1, this.bindGroups[this.cascades.currentFoamIndex] as GPUBindGroup);
+    pass.setBindGroup(2, this.overlay.sampleBindGroup);
     pass.setVertexBuffer(0, this.vertexBuffer);
     pass.setIndexBuffer(this.indexBuffer, 'uint32');
     this.levelRanges.forEach((range, level) => {

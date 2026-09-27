@@ -109,6 +109,12 @@ export interface RudderConfig {
   readonly propwashFraction: number;
 }
 
+export interface WindageConfig {
+  /** Drag coefficients of the above-water profile for head/stern and beam wind. */
+  readonly frontalDragCoefficient: number;
+  readonly lateralDragCoefficient: number;
+}
+
 export interface ShipConfig {
   readonly name: string;
   readonly hull: HullFormConfig;
@@ -116,6 +122,7 @@ export interface ShipConfig {
   readonly hydrodynamics: HydrodynamicsConfig;
   readonly propulsion: PropulsionConfig;
   readonly rudder: RudderConfig;
+  readonly windage: WindageConfig;
   /** Nominal top speed (knots); used by propulsion from phase 4. */
   readonly maxSpeedKnots: number;
 }
@@ -179,6 +186,10 @@ export const PATROL_BOAT: ShipConfig = {
     profileDragCoefficient: 0.02,
     spanEfficiency: 0.9,
     propwashFraction: 0.5,
+  },
+  windage: {
+    frontalDragCoefficient: 0.8,
+    lateralDragCoefficient: 1.0,
   },
   maxSpeedKnots: 22,
 };

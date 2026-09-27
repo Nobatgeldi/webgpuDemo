@@ -3,11 +3,13 @@ import type { WaterQuery } from '../ocean/waterQuery';
 import type { DebugDraw, Rgba } from '../render/debugDraw';
 import type { FrameUniforms } from '../render/frameUniforms';
 import type { ShipCameraTarget } from '../camera/shipCamera';
+import { rotate } from './rigidBody';
 import { Ship, buildShipModel } from './ship';
 import type { ShipConfig } from './shipConfig';
 import { SHIP_VERTEX_FLOATS, bridgeEyePosition, buildShipVisualMesh, type ShipVisualMesh } from './shipMesh';
 import { ShipRenderer } from './shipRenderer';
 import { WaterGridProvider, WaterPointProbe } from './waterGrid';
+import type { WaterHeightProvider } from './waterHeightProvider';
 
 /**
  * Margin around the hull covered by the water grid (m): the ship moves while
@@ -147,6 +149,24 @@ export class ShipSystem {
     norm = Math.sqrt(norm);
     for (let i = 0; i < 4; i++) this.renderOrientation[i] = (this.renderOrientation[i] as number) / norm;
     return this.renderPosition;
+  }
+
+  /** Water heights around the ship (GPU ocean), for effects that need the surface on the CPU. */
+  get water(): WaterHeightProvider {
+    return this.waterGrid;
+  }
+
+  /**
+   * Moves a world point that is attached to the ship at the latest physics step
+   * onto the interpolated render pose (e.g. the flag cloth).
+   */
+  physicsToRenderPose(world: Float64Array, out: Float64Array): Float64Array {
+    const body = this.ship.body;
+    for (let i = 0; i < 3; i++) out[i] = (world[i] as number) - (body.position[i] as number);
+    rotate(body.orientation, out, out, true);
+    rotate(this.renderOrientation, out, out, false);
+    for (let i = 0; i < 3; i++) out[i] = (out[i] as number) + (this.renderPosition[i] as number);
+    return out;
   }
 
   /** Heading of the interpolated render pose, clockwise from north (rad). */
