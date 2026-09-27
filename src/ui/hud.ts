@@ -68,6 +68,8 @@ export interface HudStats {
   readonly renderHeight: number;
   readonly paused: boolean;
   readonly simTimeSeconds: number;
+  /** Transient status line (quality switch, benchmark progress), or null. */
+  readonly status: string | null;
 }
 
 type HudField =
@@ -105,6 +107,7 @@ export function normalizeSignedDeg(deg: number): number {
 export class Hud {
   private readonly fields: Record<HudField, HTMLElement>;
   private readonly pausedBanner: HTMLElement;
+  private readonly statusBanner: HTMLElement;
   private readonly compassCard: SVGGElement;
   private readonly windArrow: SVGGElement;
   private readonly headingText: SVGTextElement;
@@ -118,7 +121,9 @@ export class Hud {
     root.replaceChildren();
     this.pausedBanner = element('div', 'hud-banner', 'DURAKLATILDI');
     this.pausedBanner.hidden = true;
-    root.append(this.pausedBanner);
+    this.statusBanner = element('div', 'hud-status');
+    this.statusBanner.hidden = true;
+    root.append(this.pausedBanner, this.statusBanner);
 
     // Compass (ship-up: the card turns, the ship symbol points up).
     const svg = document.createElementNS(SVG_NS, 'svg');
@@ -230,6 +235,8 @@ export class Hud {
     }
     this.lastRefreshMs = nowMs;
     this.pausedBanner.hidden = !stats.paused;
+    this.statusBanner.hidden = stats.status === null;
+    this.statusBanner.textContent = stats.status ?? '';
     const heading = Math.round(ship.headingDeg) % 360;
     this.headingText.textContent = `${String(heading).padStart(3, '0')}°`;
     this.fields.speed.textContent = `${ship.speedKnots.toFixed(1)} kn`;

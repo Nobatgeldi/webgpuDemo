@@ -14,7 +14,7 @@
  */
 import { AIR_DENSITY_KG_M3 } from '../core/constants';
 import { hullSection } from './hull';
-import type { RigidBody } from './rigidBody';
+import { BODY_FORWARD, BODY_STARBOARD, type RigidBody } from './rigidBody';
 import type { ShipConfig } from './shipConfig';
 import { ShipMaterial, superstructure } from './shipMesh';
 
@@ -150,8 +150,8 @@ export class WindLoad {
   apply(body: RigidBody, windX: number, windZ: number): void {
     const w = this.windage;
     const s = this.state;
-    body.rotateToWorld([1, 0, 0], this.forward);
-    body.rotateToWorld([0, 0, 1], this.starboard);
+    body.rotateToWorld(BODY_FORWARD, this.forward);
+    body.rotateToWorld(BODY_STARBOARD, this.starboard);
     // Lateral load at the lateral centroid.
     const lateral = this.relativeWind(body, w.lateralCentre[0], w.lateralCentre[1], windX, windZ);
     const v = this.dot(lateral, this.starboard);

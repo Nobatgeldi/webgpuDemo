@@ -14,8 +14,6 @@ import { SCENE_PRELUDE, WGSL } from '../shaders';
 import { MAX_SPRAY_EMITTERS, type SprayEmitter } from './shipEffectSources';
 
 export const SPRAY_CONFIG = {
-  /** Particles alive at most. */
-  capacity: 16384,
   /** Spawned per emitter and frame at most (bursts beyond this are dropped). */
   maxSpawnPerEmitterFrame: 1024,
   /** Lifetime range (s); most particles fall back into the sea earlier. */
@@ -84,13 +82,15 @@ export class SprayParticles {
     private readonly renderUniforms: GPUBuffer,
     private readonly particleBuffer: GPUBuffer,
     private readonly patchSizes: readonly number[],
+    /** Particles alive at most (per quality preset). */
+    readonly capacity: number,
   ) {
     const f = this.updateFloats;
     const o = SPRAY_UPDATE_UNIFORM_OFFSETS;
     for (let c = 0; c < 3; c++) f[o.ocean + 8 + c] = patchSizes[c] ?? 1;
     f[o.ocean + 11] = patchSizes.length;
     f[o.wind + 3] = GRAVITY_M_S2;
-    f[o.params] = SPRAY_CONFIG.capacity;
+    f[o.params] = capacity;
     f[o.variation] = SPRAY_CONFIG.lifetimeMinS;
     f[o.variation + 1] = SPRAY_CONFIG.lifetimeMaxS;
     f[o.variation + 2] = SPRAY_CONFIG.dragTimeMinS;
@@ -107,6 +107,7 @@ export class SprayParticles {
     device: GPUDevice,
     frameUniforms: FrameUniforms,
     displacement: { readonly texture: GPUTexture; readonly patchSizes: readonly number[] },
+    capacity: number,
   ): Promise<SprayParticles> {
     const C = GPUShaderStage.COMPUTE;
     const updateLayout = device.createBindGroupLayout({
@@ -173,7 +174,7 @@ export class SprayParticles {
     // Zero-initialised: age 0 >= lifetime 0, so every particle starts dead.
     const particleBuffer = device.createBuffer({
       label: 'spray-particles',
-      size: SPRAY_CONFIG.capacity * PARTICLE_BYTES,
+      size: capacity * PARTICLE_BYTES,
       usage: GPUBufferUsage.STORAGE,
     });
     const sampler = device.createSampler({
@@ -211,6 +212,7 @@ export class SprayParticles {
       renderUniforms,
       particleBuffer,
       displacement.patchSizes,
+      capacity,
     );
   }
 
@@ -270,7 +272,7 @@ export class SprayParticles {
         f[o.emitterVelocities + 4 * count + 3] = e.speedSpreadMs;
         u[o.emitterRanges + 4 * count] = this.cursor;
         u[o.emitterRanges + 4 * count + 1] = spawn;
-        this.cursor = (this.cursor + spawn) % c.capacity;
+        this.cursor = (this.cursor + spawn) % this.capacity;
         this.spawnedTotal += spawn;
         count++;
       }
@@ -283,7 +285,7 @@ export class SprayParticles {
     const pass = encoder.beginComputePass({ label: 'spray-update', timestampWrites });
     pass.setPipeline(this.updatePipeline);
     pass.setBindGroup(0, this.updateBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(c.capacity / WORKGROUP_SIZE));
+    pass.dispatchWorkgroups(Math.ceil(this.capacity / WORKGROUP_SIZE));
     pass.end();
   }
 
@@ -300,7 +302,7 @@ export class SprayParticles {
     if (!this.enabled) return;
     pass.setPipeline(this.renderPipeline);
     pass.setBindGroup(1, this.renderBindGroup);
-    pass.draw(VERTICES_PER_SPRITE, SPRAY_CONFIG.capacity);
+    pass.draw(VERTICES_PER_SPRITE, this.capacity);
   }
 
   dispose(): void {

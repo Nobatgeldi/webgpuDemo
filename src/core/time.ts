@@ -85,3 +85,61 @@ export class ExponentialAverage {
     this.current = this.current === null ? sample : this.current + (sample - this.current) * this.weight;
   }
 }
+
+export interface FrameTimeSummary {
+  /** Frames in the window. */
+  readonly count: number;
+  readonly meanMs: number;
+  /** 95th percentile and worst frame time (ms). */
+  readonly p95Ms: number;
+  readonly maxMs: number;
+  /** Frames per second from the mean frame time. */
+  readonly meanFps: number;
+}
+
+/**
+ * Frame times over the last `capacity` frames (ring buffer, no allocation per
+ * frame). The mean hides stutter; the 95th percentile and the maximum show it.
+ */
+export class FrameTimeStats {
+  private readonly samples: Float64Array;
+  private readonly sorted: Float64Array;
+  private next = 0;
+  private count = 0;
+
+  constructor(readonly capacity: number) {
+    if (!(capacity >= 1)) {
+      throw new RangeError(`capacity must be >= 1, got ${capacity}`);
+    }
+    this.samples = new Float64Array(capacity);
+    this.sorted = new Float64Array(capacity);
+  }
+
+  push(frameMs: number): void {
+    this.samples[this.next] = frameMs;
+    this.next = (this.next + 1) % this.capacity;
+    this.count = Math.min(this.count + 1, this.capacity);
+  }
+
+  reset(): void {
+    this.count = 0;
+    this.next = 0;
+  }
+
+  /** Summary of the window, or null before the first sample. */
+  summary(): FrameTimeSummary | null {
+    const n = this.count;
+    if (n === 0) {
+      return null;
+    }
+    const view = this.sorted.subarray(0, n);
+    view.set(this.samples.subarray(0, n));
+    view.sort();
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += view[i] as number;
+    const mean = sum / n;
+    // Nearest-rank percentile.
+    const p95 = view[Math.min(n - 1, Math.ceil(0.95 * n) - 1)] as number;
+    return { count: n, meanMs: mean, p95Ms: p95, maxMs: view[n - 1] as number, meanFps: mean > 0 ? 1000 / mean : 0 };
+  }
+}

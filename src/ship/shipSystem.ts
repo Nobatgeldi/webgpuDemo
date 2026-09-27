@@ -51,6 +51,7 @@ export class ShipSystem {
   private readonly previousOrientation = new Float64Array(4);
   private readonly renderPosition = new Float64Array(3);
   private readonly renderOrientation = new Float64Array(4);
+  private readonly gridCentre = new Float64Array(3);
   /** Render pose, dimensions and bridge position for the camera rig. */
   readonly cameraTarget: ShipCameraTarget;
 
@@ -118,7 +119,7 @@ export class ShipSystem {
   /** Adds this frame's water queries (grid around the ship, camera point). */
   requestWater(query: WaterQuery, cameraX: number, cameraZ: number): void {
     const body = this.ship.body;
-    const centre = this.ship.hullPointToWorld(0, 0, 0, new Float64Array(3));
+    const centre = this.ship.hullPointToWorld(0, 0, 0, this.gridCentre);
     const x = (centre[0] as number) + (body.velocity[0] as number) * WATER_QUERY_LATENCY_S;
     const z = (centre[2] as number) + (body.velocity[2] as number) * WATER_QUERY_LATENCY_S;
     this.waterGrid.request(query, x, z, this.ship.headingRad);

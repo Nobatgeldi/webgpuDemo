@@ -87,6 +87,13 @@ body {
   letter-spacing: 0.08em;
 }
 
+.hud-status {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
 .hud-hint {
   margin-top: 6px;
   color: var(--overlay-muted);

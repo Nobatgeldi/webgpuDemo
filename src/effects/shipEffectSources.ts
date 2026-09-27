@@ -8,6 +8,7 @@
  * specified as the foam left in the water after the ship passed ("deposit"),
  * which is independent of the speed; the emission rate follows from it.
  */
+import { BODY_FORWARD, BODY_STARBOARD } from '../ship/rigidBody';
 import { GRAVITY_M_S2 } from '../core/constants';
 import { hullSection } from '../ship/hull';
 import type { Ship } from '../ship/ship';
@@ -227,8 +228,8 @@ export class ShipEffectSources {
     const ship = this.ship;
     const body = ship.body;
     const form = ship.model.config.hull;
-    body.rotateToWorld([1, 0, 0], this.forward);
-    body.rotateToWorld([0, 0, 1], this.starboard);
+    body.rotateToWorld(BODY_FORWARD, this.forward);
+    body.rotateToWorld(BODY_STARBOARD, this.starboard);
     const bowRate = BOW_SPRAY_PARTICLES_PER_S * smoothstep(BOW_SPRAY_FROUDE_START, BOW_SPRAY_FROUDE_FULL, this.froude);
     const entry = Math.max(0, this.bowEntrySpeedMs - SLAM_SPRAY_ENTRY_THRESHOLD_MS);
     const slamRate = SLAM_SPRAY_PARTICLES_PER_S * entry * entry;

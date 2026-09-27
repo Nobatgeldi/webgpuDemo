@@ -4,9 +4,9 @@ Tarayıcıda çalışan, ham WebGPU + WGSL ile yazılmış bir açık deniz gemi
 simülatörü. Hedef: rüzgâra göre fiziksel olarak tutarlı üretilen FFT okyanusu
 ve bu dalgalara gerçek kuvvetlerle tepki veren 6 serbestlik dereceli bir gemi.
 
-> **Durum:** Faz 0 (iskelet), Faz 1 (FFT okyanus çekirdeği), Faz 2 (görsel
-> kalite) ve Faz 3 (su sorgusu, gövde, 6DOF yüzerlik fiziği) tamamlandı.
-> Sürüş, kamera modları ve rüzgâr etkileri sonraki fazlarda; yol haritası için
+> **Durum:** Fazlar 0–6 tamamlandı: FFT okyanusu ve görsel kalite, GPU su
+> sorgusu ve 6DOF yüzerlik, pervane/dümen ve kamera, rüzgâr yükü, dümen suyu
+> köpüğü, sprey ve bayrak, kalite ön ayarları ve performans ölçümü. Faz planı:
 > [docs/PLAN.md](docs/PLAN.md).
 
 ## Gereksinimler
@@ -25,7 +25,20 @@ npm run build      # üretim derlemesi → dist/
 npm run preview    # derlemeyi yerelde sunar
 npm run typecheck  # TypeScript tip denetimi
 npm test           # Vitest birim testleri
+npm run test:e2e   # Playwright smoke testi (aşağıya bakın)
 ```
+
+### Smoke testi (Playwright)
+
+`npm run test:e2e` derlemeyi yapar, önizleme sunucusunu başlatır ve headless
+Chromium'da (WebGPU, SwiftShader yazılım adaptörü) sayfayı açar: konsol hatası
+ve uyarısı olmadığını, simülasyonun ilerlediğini, HUD'ın dolduğunu, panelden
+kalite değiştirmenin çalıştığını ve yakalanmamış WebGPU hatası olmadığını
+denetler. Tarayıcı ilk seferde `npx playwright install chromium` ile kurulur.
+Headless SwiftShader canvas sunumunda cihazı kaybettiği için (uygulamadan
+bağımsız bir kısıt, aşağıya bakın) test canvas bağlamını offscreen bir dokuya
+yönlendirir (`e2e/support/headlessWebgpu.js`); uygulamanın tüm GPU geçişleri
+yine çalışır, yalnızca ekrana sunum atlanır.
 
 ## Cloudflare Workers'a dağıtım
 
@@ -93,11 +106,49 @@ Tekrarlanabilir testler için başlangıç ayarları URL'den verilebilir:
 | `seed` | Okyanus gürültüsü tohumu | 0 – 4294967295 tamsayı |
 | `quality` | Kalite ön ayarı | `low`, `medium`, `high` |
 | `paused` | Duraklatılmış başla | `1`/`0`, `true`/`false` |
+| `bench` | Performans ölçümü (aşağıya bakın) | `1`/`0`, `true`/`false` |
 
-Geçersiz değerler varsayılana döner ve konsola uyarı yazılır. `quality`
-FFT çözünürlüğünü (128/256/512), kaskad sayısını (2/3/3) ve ağ çözünürlüğünü
-belirler; şimdilik yalnızca URL'den seçilir (panelde Faz 6'da gelecek).
-Varsayılan: Bf 5, 225°, fetch 300 km, `medium`.
+Geçersiz değerler varsayılana döner ve konsola uyarı yazılır. Varsayılan:
+Bf 5, 225°, fetch 300 km, `medium`. Kalite panelden de (Görüntü → Kalite)
+çalışma anında değiştirilebilir; seçim URL'ye yazılır.
+
+## Kalite ön ayarları
+
+| | Düşük (`low`) | Orta (`medium`) | Yüksek (`high`) |
+|---|---|---|---|
+| FFT çözünürlüğü | 128² | 256² | 512² |
+| Kaskad sayısı | 2 | 3 | 3 |
+| LOD halkası (clipmap seviyesi) | 8 | 9 | 10 |
+| Halka başına hücre (2M) / en ince aralık | 64 / 1.0 m | 128 / 0.5 m | 192 / 0.4 m |
+| Dalgalı yüzeyin yarıçapı (ötesi düz eteklik) | ~8 km | ~16 km | ~39 km |
+| Dümen suyu köpük alanı | 512² × 0.75 m (384 m) | 1024² × 0.5 m (512 m) | 1536² × 0.4 m (614 m) |
+| Sprey parçacığı | 4096 | 8192 | 16 384 |
+
+Kalite değişince bu kaynaklar arka planda yeniden kurulur ve hazır olunca
+yerine geçer (HUD'da "Kalite değiştiriliyor…"); gemi, rüzgâr ve kamera
+kesintisiz devam eder. Dalga deseni yeni çözünürlükte yeniden üretildiği için
+gemi o an farklı dalgalara oturur; dümen suyu izi ve sprey sıfırlanır, bayrak
+korunur. Eski kaynaklar GPU işleri bittikten sonra (4 kare) yok edilir.
+
+## Performans ölçümü
+
+- **Debug katmanı (F) → Performance:** son 300 karenin ortalama, %95 ve en
+  kötü kare süresi, CPU süresi ve (`timestamp-query` varsa) GPU süresi; altında
+  her GPU geçişinin süresi (okyanus simülasyonu, sahne, dümen suyu, sprey, ton
+  eşleme).
+- **`?bench=1`:** Otomatik ölçüm. Gemi tam yolda (köpük ve sprey etkin),
+  Düşük → Orta → Yüksek sırasıyla her ön ayar için 4 s ısınma + 10 s ölçüm
+  yapılır; sonuçlar (FPS, ortalama/%95/en kötü kare süresi, GPU süresi,
+  çözünürlük) konsola tablo olarak yazılır ve debug katmanında gösterilir.
+  Örnek: `?bench=1&wind=6`. Hedeflerin (RTX 3060, 1440p, Yüksek ≥ 60 FPS;
+  entegre GPU, Düşük ≥ 30 FPS) doğrulanması için tarayıcı penceresi hedef
+  çözünürlükte, tam ekranda çalıştırılmalıdır.
+
+Kare başına GPU nesnesi (buffer, doku, bind group) oluşturulmaz; tek istisna
+her kare yeni dokusunu veren canvas'ın görünümüdür. Fizik adımlarında da
+bellek ayırmaz (sabit eksen vektörleri, önceden ayrılmış ara diziler). GPU'dan
+geri okumalar (su sorgusu, zamanlayıcı, Hs/köpük istatistiği) staging halkası
+ve `mapAsync` ile asenkron yapılır.
 
 ## Mimari özet
 
@@ -128,7 +179,9 @@ src/
   input/             klavye/fare durumu
   ui/                panel (lil-gui), hud, debugOverlay, errorScreen
   shaders/           *.wgsl (Vite ?raw ile içe aktarılır)
+  quality.ts         kalite ön ayarları (okyanus, köpük alanı, sprey bütçesi)
 tests/               Vitest birim testleri
+e2e/                 Playwright smoke testi
 docs/PLAN.md         faz planı ve dosya listesi
 worker/              Cloudflare Worker: statik derlemeyi sunar, yanıt başlıkları
 wrangler.jsonc       Worker yapılandırması
@@ -200,7 +253,7 @@ yazılır; yakalanmamış GPU hataları (`uncapturederror`) konsolu boğmayacak
 şekilde sınırlanarak raporlanır.
 
 **Ölçüm:** HUD'da FPS, CPU kare süresi ve (`timestamp-query` destekleniyorsa)
-GPU süresi gösterilir. GPU zamanları staging buffer halkası ve `mapAsync` ile
+GPU süresi gösterilir; ayrıntılar "Performans ölçümü" bölümünde. GPU zamanları staging buffer halkası ve `mapAsync` ile
 asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 
 ## Koordinatlar ve birimler
@@ -373,7 +426,8 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
   (iç mekân modeli yok).
 - Hidrodinamik sönüm su parçacığı (yörünge) hızlarını hesaba katmaz; bu yüzden
   dalgalarda geminin yavaş ortalama sürüklenmesi (düzensiz denizde ~0.2 m/s)
-  yön olarak fiziksel değildir. Slamming ve yeşil su (güverteye su) etkileri yok.
+  yön olarak fiziksel değildir. Slamming darbe yükleri ve yeşil su (güverteye
+  su) modellenmez; baş vurma yalnızca görsel olarak (sprey, köpük) vardır.
 - Su sorgusu sonuçları 1–3 kare (~50 ms) gecikmelidir; ızgara gemiyi tahmini
   konumunda örnekler, ama dalganın bu süredeki ilerlemesi telafi edilmez.
 - Köpük dokusu en büyük kaskadın çözünürlüğündedir; düşük kalitede (128²)
@@ -382,10 +436,15 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
   ayrı bir düşük frekanslı modülasyon yoktur (normal kamera mesafelerinde fark
   edilmedi).
 - Gece gökyüzü (ay, yıldızlar) ve gerçek bulut geometrisi yoktur.
-- Dalga yer değiştirmesi en dış clipmap halkasında (~8–10 km) sönümlenir;
-  ötesindeki eteklik düzdür (dalgalar yalnızca normal dokularıyla görünür).
-- Kalite ön ayarı çalışma anında değiştirilemez (yalnızca URL).
-- Performans gerçek donanımda henüz ölçülmedi.
+- Dalga yer değiştirmesi en dış clipmap halkasında (kaliteye göre ~8/16/39 km)
+  sönümlenir; ötesindeki eteklik düzdür (dalgalar yalnızca normal dokularıyla
+  görünür). Ufuk hizasında bu uzak üçgenlerin arasında kalabilen piksel altı
+  boşluklarda gökyüzü geçişi, denizin uzakta karıştığı yansıyan gökyüzü rengini
+  çizer (siyah nokta oluşmaz).
+- Performans hedef donanımda (RTX 3060, entegre GPU) ölçülmedi: geliştirme
+  ortamında yalnızca yazılım GPU'su (SwiftShader) vardı, orada kare süreleri
+  anlamlı değildir. Ölçüm için `?bench=1` kullanılabilir.
+- Kalite değiştirilince dalga deseni ve dümen suyu izi yeniden başlar.
 - Headless (ekransız) Chromium + SwiftShader ortamında WebGPU canvas'a sunum
   yapıldığında cihaz kaybediliyor ("A valid external Instance reference no
   longer exists"); bu, uygulamadan bağımsız bir test ortamı kısıtıdır (en basit

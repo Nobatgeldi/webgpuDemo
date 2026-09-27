@@ -41,10 +41,14 @@ export interface OceanQualityConfig {
   readonly meshBaseSpacingM: number;
 }
 
+/**
+ * Displaced clipmap extent: meshBaseSpacingM * 2 * meshHalfCells * 2^(meshLevels - 1)
+ * (low ~8 km, medium ~16 km, high ~39 km); the flat skirt continues to the horizon.
+ */
 export const OCEAN_QUALITY: Record<QualityPreset, OceanQualityConfig> = {
-  low: { fftSize: 128, cascadeCount: 2, meshHalfCells: 32, meshLevels: 9, meshBaseSpacingM: 1.0 },
+  low: { fftSize: 128, cascadeCount: 2, meshHalfCells: 32, meshLevels: 8, meshBaseSpacingM: 1.0 },
   medium: { fftSize: 256, cascadeCount: 3, meshHalfCells: 64, meshLevels: 9, meshBaseSpacingM: 0.5 },
-  high: { fftSize: 512, cascadeCount: 3, meshHalfCells: 96, meshLevels: 9, meshBaseSpacingM: 0.4 },
+  high: { fftSize: 512, cascadeCount: 3, meshHalfCells: 96, meshLevels: 10, meshBaseSpacingM: 0.4 },
 };
 
 export interface CascadeBand {

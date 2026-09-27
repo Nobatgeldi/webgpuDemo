@@ -4,6 +4,8 @@ import type { ToneMapper } from '../render/tonemapPass';
 import type { DebugTextureName } from '../render/debugTextureView';
 import { beaufortToWindSpeed, windSpeedToBeaufort } from '../ocean/beaufort';
 import { CAMERA_MODES, CAMERA_MODE_LABELS, type CameraMode } from '../camera/shipCamera';
+import { QUALITY_PRESETS, type QualityPreset } from '../core/urlParams';
+import { QUALITY_LABELS } from '../quality';
 
 const DEBUG_TEXTURE_OPTIONS: Record<string, DebugTextureName> = {
   Kapalı: 'none',
@@ -80,6 +82,9 @@ export class ControlPanel {
     sun.add(settings, 'stormClouds').name('Fırtınada bulut örtüsü');
 
     const display = this.gui.addFolder('Görüntü');
+    const qualityOptions: Record<string, QualityPreset> = {};
+    for (const preset of QUALITY_PRESETS) qualityOptions[QUALITY_LABELS[preset]] = preset;
+    display.add(settings, 'quality', qualityOptions).name('Kalite');
     display.add(settings, 'autoExposure').name('Otomatik pozlama');
     display
       .add(settings, 'exposureEv', L.exposureEv.min, L.exposureEv.max, L.exposureEv.step)

@@ -3,6 +3,7 @@ import type { DebugTextureName } from './render/debugTextureView';
 import { DEFAULT_PIXEL_RATIO_CAP } from './render/renderConfig';
 import { beaufortToWindSpeed } from './ocean/beaufort';
 import type { CameraMode } from './camera/shipCamera';
+import { DEFAULT_QUALITY, type QualityPreset } from './core/urlParams';
 
 /** Default sea state: moderate breeze (Bf 5) from the south-west over open ocean. */
 const DEFAULT_BEAUFORT = 5;
@@ -37,6 +38,8 @@ export interface AppSettings {
   spray: boolean;
   flag: boolean;
   // Display
+  /** Quality preset (ocean resolution, effects budget); switching rebuilds those resources. */
+  quality: QualityPreset;
   /** Exposure adapts to the sky brightness; exposureEv is then a compensation. */
   autoExposure: boolean;
   exposureEv: number;
@@ -91,6 +94,7 @@ export function createDefaultSettings(): AppSettings {
     wakeFoam: true,
     spray: true,
     flag: true,
+    quality: DEFAULT_QUALITY,
     autoExposure: true,
     exposureEv: 0,
     toneMapper: 'aces',

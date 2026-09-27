@@ -16,7 +16,7 @@
  */
 import { SEA_WATER_DENSITY_KG_M3 } from '../core/constants';
 import { calmWaterResistance, type HydrodynamicCoefficients } from './hydrodynamics';
-import type { RigidBody } from './rigidBody';
+import { BODY_FORWARD, BODY_STARBOARD, type RigidBody } from './rigidBody';
 import { KNOTS_TO_MS, type PropulsionConfig, type RudderConfig } from './shipConfig';
 import type { WaterHeightProvider } from './waterHeightProvider';
 
@@ -135,8 +135,8 @@ export class Propulsion {
     const maxStep = r.rateRadPerS * dt;
     s.rudderAngleRad += Math.min(maxStep, Math.max(-maxStep, order - s.rudderAngleRad));
 
-    body.rotateToWorld([1, 0, 0], this.forward);
-    body.rotateToWorld([0, 0, 1], this.starboard);
+    body.rotateToWorld(BODY_FORWARD, this.forward);
+    body.rotateToWorld(BODY_STARBOARD, this.starboard);
     const fx = this.forward[0] as number, fy = this.forward[1] as number, fz = this.forward[2] as number;
     const sx = this.starboard[0] as number, sy = this.starboard[1] as number, sz = this.starboard[2] as number;
 

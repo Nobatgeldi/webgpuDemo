@@ -209,6 +209,13 @@ export class WaterQuery {
     this.submittedStaging = staging;
   }
 
+  dispose(): void {
+    this.ring.dispose();
+    this.pointBuffer.destroy();
+    this.heightBuffer.destroy();
+    this.uniformBuffer.destroy();
+  }
+
   /** Starts the readback; call right after queue.submit(). */
   afterSubmit(): void {
     const staging = this.submittedStaging;

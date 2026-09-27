@@ -9,10 +9,15 @@ import { composeWgsl, createShaderModule } from '../core/shader';
 import { WGSL } from '../shaders';
 import type { WakeEmitter } from './shipEffectSources';
 
+/** Resolution of the wake field (per quality preset). */
+export interface WakeResolution {
+  /** Texels per side (even). */
+  readonly textureSize: number;
+  /** Cell size (m); the window covers textureSize * cellSizeM. */
+  readonly cellSizeM: number;
+}
+
 export const WAKE_CONFIG = {
-  /** Texels per side and cell size: a 512 m window at 0.5 m resolution. */
-  textureSize: 1024,
-  cellSizeM: 0.5,
   /** e-folding lifetime of the wake foam (s); the turbulent wake of a ship stays visible for minutes. */
   decayTimeS: 45,
   /** e-folding lifetime of fresh, dense foam before it breaks up into streaks (s). */
@@ -53,13 +58,14 @@ export class WakeFoam {
 
   private constructor(
     private readonly device: GPUDevice,
+    readonly resolution: WakeResolution,
     private readonly pipeline: GPUComputePipeline,
     updateLayout: GPUBindGroupLayout,
     sampleLayout: GPUBindGroupLayout,
     private readonly updateUniforms: GPUBuffer,
     private readonly sampleUniforms: GPUBuffer,
   ) {
-    const size = WAKE_CONFIG.textureSize;
+    const size = resolution.textureSize;
     this.sampleLayout = sampleLayout;
     this.textures = [0, 1].map((i) =>
       device.createTexture({
@@ -101,11 +107,11 @@ export class WakeFoam {
     );
     const f = this.updateFloats;
     f[6] = WAKE_CONFIG.maxFoam;
-    f[8] = WAKE_CONFIG.cellSizeM;
-    f[9] = WAKE_CONFIG.textureSize;
+    f[8] = resolution.cellSizeM;
+    f[9] = resolution.textureSize;
   }
 
-  static async create(device: GPUDevice): Promise<WakeFoam> {
+  static async create(device: GPUDevice, resolution: WakeResolution): Promise<WakeFoam> {
     const module = await createShaderModule(device, composeWgsl('wake', [WGSL.wake]));
     const C = GPUShaderStage.COMPUTE;
     const updateLayout = device.createBindGroupLayout({
@@ -136,7 +142,7 @@ export class WakeFoam {
       size: SAMPLE_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    return new WakeFoam(device, pipeline, updateLayout, sampleLayout, updateUniforms, sampleUniforms);
+    return new WakeFoam(device, resolution, pipeline, updateLayout, sampleLayout, updateUniforms, sampleUniforms);
   }
 
   /** World XZ of the window's lower corner (m). */
@@ -166,24 +172,24 @@ export class WakeFoam {
     timestampWrites?: GPUComputePassTimestampWrites,
   ): void {
     const c = WAKE_CONFIG;
-    const n = c.textureSize;
-    const cellX = Math.floor(centreX / c.cellSizeM) - n / 2;
-    const cellZ = Math.floor(centreZ / c.cellSizeM) - n / 2;
+    const { textureSize: n, cellSizeM } = this.resolution;
+    const cellX = Math.floor(centreX / cellSizeM) - n / 2;
+    const cellZ = Math.floor(centreZ / cellSizeM) - n / 2;
     const ints = this.updateInts;
     const f = this.updateFloats;
-    const previousX = this.hasOrigin ? Math.round(this.originX / c.cellSizeM) : cellX;
-    const previousZ = this.hasOrigin ? Math.round(this.originZ / c.cellSizeM) : cellZ;
+    const previousX = this.hasOrigin ? Math.round(this.originX / cellSizeM) : cellX;
+    const previousZ = this.hasOrigin ? Math.round(this.originZ / cellSizeM) : cellZ;
     ints[0] = cellX;
     ints[1] = cellZ;
     // Before the first update the previous window is far away, so everything starts empty.
     ints[2] = this.hasOrigin ? previousX : cellX + 2 * n;
     ints[3] = this.hasOrigin ? previousZ : cellZ + 2 * n;
-    this.originX = cellX * c.cellSizeM;
-    this.originZ = cellZ * c.cellSizeM;
+    this.originX = cellX * cellSizeM;
+    this.originZ = cellZ * cellSizeM;
     this.hasOrigin = true;
 
     f[4] = Math.exp(-dt / c.decayTimeS);
-    f[5] = Math.min(c.maxDiffusionNumber, (c.diffusivityM2PerS * dt) / (c.cellSizeM * c.cellSizeM));
+    f[5] = Math.min(c.maxDiffusionNumber, (c.diffusivityM2PerS * dt) / (cellSizeM * cellSizeM));
     f[10] = Math.exp(-dt / c.freshDecayTimeS);
     const count = this.enabled ? Math.min(emitters.length, WAKE_MAX_EMITTERS) : 0;
     f[7] = count;
@@ -212,7 +218,7 @@ export class WakeFoam {
   /** Uniforms for sampling from a camera at (cameraX, cameraZ). */
   prepareDraw(cameraX: number, cameraZ: number): void {
     const c = WAKE_CONFIG;
-    const size = c.textureSize * c.cellSizeM;
+    const size = this.resolution.textureSize * this.resolution.cellSizeM;
     const d = this.sampleData;
     d[0] = wrapPeriodic(cameraX, size);
     d[1] = wrapPeriodic(cameraZ, size);

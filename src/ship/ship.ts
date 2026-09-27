@@ -7,7 +7,7 @@ import { BuoyancySolver } from './buoyancy';
 import { buildHullMesh, type HullMesh } from './hull';
 import { HydrodynamicModel, type HydrodynamicCoefficients } from './hydrodynamics';
 import { computeHydrostatics, fitSectionExponent, type Hydrostatics } from './hydrostatics';
-import { RigidBody, multiplyQuaternions, quaternionFromAxisAngle } from './rigidBody';
+import { BODY_FORWARD, BODY_STARBOARD, RigidBody, multiplyQuaternions, quaternionFromAxisAngle } from './rigidBody';
 import { Helm } from './helm';
 import { Propulsion, calibratePropeller, type PropellerCalibration } from './propulsion';
 import type { ShipConfig } from './shipConfig';
@@ -175,7 +175,7 @@ export class Ship {
 
   /** Sets the forward speed (m/s) along the current heading, e.g. to start a test under way. */
   setForwardSpeed(speedMs: number): void {
-    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    const forward = this.body.rotateToWorld(BODY_FORWARD, this.axis);
     for (let i = 0; i < 3; i++) this.body.velocity[i] = speedMs * (forward[i] as number);
   }
 
@@ -193,19 +193,19 @@ export class Ship {
 
   /** Heel angle, positive with the starboard side down (rad). */
   get rollRad(): number {
-    const starboard = this.body.rotateToWorld([0, 0, 1], this.axis);
+    const starboard = this.body.rotateToWorld(BODY_STARBOARD, this.axis);
     return Math.asin(Math.max(-1, Math.min(1, -(starboard[1] as number))));
   }
 
   /** Trim angle, positive bow up (rad). */
   get pitchRad(): number {
-    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    const forward = this.body.rotateToWorld(BODY_FORWARD, this.axis);
     return Math.asin(Math.max(-1, Math.min(1, forward[1] as number)));
   }
 
   /** Heading, clockwise from north (rad, [0, 2 pi)). */
   get headingRad(): number {
-    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    const forward = this.body.rotateToWorld(BODY_FORWARD, this.axis);
     const heading = Math.atan2(forward[0] as number, -(forward[2] as number));
     return heading < 0 ? heading + 2 * Math.PI : heading;
   }
@@ -227,7 +227,7 @@ export class Ship {
 
   /** Speed through the water along the ship's axis (m/s, negative astern). */
   get surgeSpeedMs(): number {
-    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    const forward = this.body.rotateToWorld(BODY_FORWARD, this.axis);
     const v = this.body.velocity;
     return (v[0] as number) * (forward[0] as number) + (v[1] as number) * (forward[1] as number) + (v[2] as number) * (forward[2] as number);
   }

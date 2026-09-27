@@ -41,7 +41,7 @@ src/core/
   canvasSize.ts          ResizeObserver, piksel oranı üst sınırı                (0)
   readback.ts            staging buffer halkası (mapAsync)                      (0)
   gpuTimer.ts            timestamp-query ile GPU süreleri                       (0)
-  urlParams.ts           ?wind=&dir=&seed=&quality=&paused=                     (0)
+  urlParams.ts           ?wind=&dir=&seed=&quality=&paused=&bench=              (0, 6)
   random.ts              seed'li PRNG + Box-Muller Gauss                        (1)
   constants.ts           fiziksel sabitler (g; ρ, ν Faz 3'te)                   (1)
 src/render/
@@ -81,6 +81,9 @@ src/ship/
   propulsion.ts          pervane (RPM gecikmesi, itki) + dümen (C_L, stall, propwash) (4)
   helm.ts                gaz kolu ve dümen emri (tuş hızı, sıfır tırnağı)      (4)
 src/core/spring.ts       kritik sönümlü yay (tam çözüm), açı sarma             (4)
+src/core/benchmark.ts    ?bench=1 kalite ön ayarı ölçümü                       (6)
+src/quality.ts           kalite ön ayarları (okyanus, köpük alanı, sprey)      (6)
+e2e/smoke.e2e.ts         Playwright smoke testi                                (6)
   wind.ts                bağıl rüzgâr yükü, silüetten rüzgâr alanları          (5)
 src/camera/
   shipCamera.ts          takip / serbest orbit / köprüüstü modları (F0 orbitCamera'nın yerini aldı) (4)
@@ -152,10 +155,14 @@ Gemiye bağıl rüzgâr kuvveti (heel + sürüklenme; test: yan rüzgârda rüzg
 altına yatma), dümen suyu köpük izi, baş dalgası/sprey compute parçacıkları,
 bayrak. Opsiyonel rüzgâr akıntısı (~%3 U10) yapılmadı.
 
-### Faz 6 — Cilalama
-Kalite ön ayarları (FFT 128/256/512, kaskad sayısı, LOD halka sayısı),
-performans ölçümü ve optimizasyon (hedef: RTX 3060 1440p Yüksek ≥ 60 FPS,
-entegre GPU Düşük ≥ 30 FPS), opsiyonel Playwright smoke testi, README.
+### Faz 6 — Cilalama ✅
+Kalite ön ayarları (FFT 128/256/512, kaskad sayısı, LOD halka sayısı 8/9/10,
+köpük alanı ve sprey bütçesi), panelden çalışma anında kalite değişimi,
+performans ölçümü (kare süresi istatistiği, `?bench=1` otomatik ölçüm) ve
+kare başına bellek ayırmayı azaltma, ufuktaki piksel boşluklarının giderilmesi,
+Playwright smoke testi (`npm run test:e2e`), README. Hedef donanımda ölçüm
+kullanıcıya kalır (`?bench=1`; hedef: RTX 3060 1440p Yüksek ≥ 60 FPS, entegre
+GPU Düşük ≥ 30 FPS).
 
 ## Önceden görülen teknik kararlar
 

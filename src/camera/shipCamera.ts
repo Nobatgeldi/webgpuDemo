@@ -14,7 +14,7 @@
 import { stepCriticalSpring, wrapAngle, type SpringState } from '../core/spring';
 import type { Input } from '../input/input';
 import type { Camera } from '../render/camera';
-import { rotate } from '../ship/rigidBody';
+import { BODY_UP, rotate } from '../ship/rigidBody';
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -233,7 +233,7 @@ export class ShipCamera {
       this.look[2] = pz;
 
       // Horizon: world up, tilted by a fraction of the ship's up vector in follow mode.
-      const shipUp = rotate(target.orientation, [0, 1, 0], this.scratch, false);
+      const shipUp = rotate(target.orientation, BODY_UP, this.scratch, false);
       const k = this.mode === 'follow' ? c.attitudeTransfer : 0;
       for (let i = 0; i < 3; i++) {
         const goal = (i === 1 ? 1 - k : 0) + k * (shipUp[i] as number);
@@ -264,7 +264,7 @@ export class ShipCamera {
     camera.forward[0] = this.look[0] as number;
     camera.forward[1] = this.look[1] as number;
     camera.forward[2] = this.look[2] as number;
-    rotate(target.orientation, [0, 1, 0], this.look, false);
+    rotate(target.orientation, BODY_UP, this.look, false);
     camera.up[0] = this.look[0] as number;
     camera.up[1] = this.look[1] as number;
     camera.up[2] = this.look[2] as number;

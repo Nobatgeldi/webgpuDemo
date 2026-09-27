@@ -62,6 +62,10 @@ export class DebugTextureView {
     this.uniformBuffer = uniformBuffer;
   }
 
+  dispose(): void {
+    this.uniformBuffer.destroy();
+  }
+
   static async create(
     device: GPUDevice,
     outputFormat: GPUTextureFormat,

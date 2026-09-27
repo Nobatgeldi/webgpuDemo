@@ -8,6 +8,7 @@
  * - seed:    unsigned 32-bit integer seeding the ocean's Gaussian noise
  * - quality: low | medium | high
  * - paused:  1/0 or true/false, start with the simulation paused
+ * - bench:   1/0 or true/false, measure the performance of every quality preset
  *
  * Invalid values fall back to defaults and produce a warning.
  */
@@ -31,11 +32,20 @@ export interface LaunchOptions {
   readonly seed: number;
   readonly quality: QualityPreset;
   readonly paused: boolean;
+  /** Run the performance benchmark over all quality presets. */
+  readonly benchmark: boolean;
 }
 
 export interface LaunchOptionsResult {
   readonly options: LaunchOptions;
   readonly warnings: readonly string[];
+}
+
+/** Updates one query parameter of the current URL without reloading or adding a history entry. */
+export function replaceUrlParameter(name: string, value: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set(name, value);
+  window.history.replaceState(window.history.state, '', url);
 }
 
 export function parseLaunchOptions(search: string): LaunchOptionsResult {
@@ -102,7 +112,18 @@ export function parseLaunchOptions(search: string): LaunchOptionsResult {
     }
   }
 
-  return { options: { beaufort, windDirectionDeg, seed, quality, paused }, warnings };
+  let benchmark = false;
+  const benchRaw = params.get('bench');
+  if (benchRaw !== null) {
+    const flag = parseBooleanFlag(benchRaw);
+    if (flag === null) {
+      warnings.push(`bench="${benchRaw}" must be 1/0 or true/false; ignoring.`);
+    } else {
+      benchmark = flag;
+    }
+  }
+
+  return { options: { beaufort, windDirectionDeg, seed, quality, paused, benchmark }, warnings };
 }
 
 function parseFiniteNumber(raw: string): number | null {

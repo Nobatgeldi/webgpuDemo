@@ -142,6 +142,12 @@ export class RigidBody {
   }
 }
 
+/** Body axes (hull frame: +X bow, +Y up, +Z starboard), shared to avoid per-step allocations. */
+export const BODY_FORWARD: readonly number[] = Object.freeze([1, 0, 0]);
+export const BODY_UP: readonly number[] = Object.freeze([0, 1, 0]);
+export const BODY_STARBOARD: readonly number[] = Object.freeze([0, 0, 1]);
+export const BODY_AFT: readonly number[] = Object.freeze([-1, 0, 0]);
+
 /** Rotates v by unit quaternion q (or its conjugate). */
 export function rotate(q: ArrayLike<number>, v: ArrayLike<number>, out: Float64Array, inverse: boolean): Float64Array {
   const w = q[0] as number;

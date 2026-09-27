@@ -86,6 +86,11 @@ export interface HydrodynamicTotals {
   residuaryN: number;
 }
 
+/** Pressure damping force of a panel moving with normal speed vn (linear + quadratic) (N). */
+function panelDamping(vn: number, area: number, k: HydrodynamicCoefficients, rho: number): number {
+  return -(k.linearPanelDamping * vn + 0.5 * rho * k.panelDragCoefficient * Math.abs(vn) * vn) * area;
+}
+
 export class HydrodynamicModel {
   readonly totals: HydrodynamicTotals = {
     friction: new Float64Array(3),
@@ -165,10 +170,8 @@ export class HydrodynamicModel {
       const normalAthwartships = nx * sx + ny * sy + nz * sz;
       const lateralNormal = lateral * normalAthwartships;
       const otherNormal = dampedNormal - lateralNormal;
-      const damping = (vn: number): number =>
-        -(k.linearPanelDamping * vn + 0.5 * rho * k.panelDragCoefficient * Math.abs(vn) * vn) * area;
-      const alongNormal = damping(otherNormal);
-      const athwartships = damping(lateralNormal) * normalAthwartships;
+      const alongNormal = panelDamping(otherNormal, area, k, rho);
+      const athwartships = panelDamping(lateralNormal, area, k, rho) * normalAthwartships;
       const pfx = alongNormal * nx + athwartships * sx;
       const pfy = alongNormal * ny + athwartships * sy;
       const pfz = alongNormal * nz + athwartships * sz;

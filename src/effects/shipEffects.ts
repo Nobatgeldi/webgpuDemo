@@ -2,6 +2,7 @@
  * The ship's visual effects together: wake foam (sampled by the ocean),
  * spray particles and the flag. Owns the per-frame emitter derivation.
  */
+import { BODY_AFT } from '../ship/rigidBody';
 import type { FrameUniforms } from '../render/frameUniforms';
 import type { ShipSystem } from '../ship/shipSystem';
 import { flagHoistPosition } from '../ship/shipMesh';
@@ -47,10 +48,13 @@ export class ShipEffects {
     shipSystem: ShipSystem,
     wake: WakeFoam,
     displacement: { readonly texture: GPUTexture; readonly patchSizes: readonly number[] },
+    sprayParticles: number,
+    /** Cloth to keep simulating (when rebuilding for another quality), or null for a new one. */
+    cloth: FlagCloth | null,
   ): Promise<ShipEffects> {
-    const cloth = new FlagCloth();
+    cloth ??= new FlagCloth();
     const [spray, flagRenderer] = await Promise.all([
-      SprayParticles.create(device, frameUniforms, displacement),
+      SprayParticles.create(device, frameUniforms, displacement, sprayParticles),
       FlagRenderer.create(device, frameUniforms, cloth),
     ]);
     return new ShipEffects(shipSystem, wake, spray, cloth, flagRenderer);
@@ -75,7 +79,7 @@ export class ShipEffects {
     ship.hullPointToWorld(bottom[0], bottom[1], bottom[2], this.hoistBottom);
     ship.hullPointToWorld(top[0], top[1], top[2], this.hoistTop);
     // Initially the flag hangs out astern.
-    ship.body.rotateToWorld([-1, 0, 0], this.hoistAway);
+    ship.body.rotateToWorld(BODY_AFT, this.hoistAway);
     const scale = windSpeedAtHeight(1, this.hoistTop[1] as number);
     this.cloth.step(dt, timeS, this.hoistBottom, this.hoistTop, this.hoistAway, this.windX * scale, 0, this.windZ * scale);
   }
