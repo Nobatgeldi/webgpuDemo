@@ -2,9 +2,10 @@ import { GRAVITY_M_S2 } from '../core/constants';
 import type { WaterQuery } from '../ocean/waterQuery';
 import type { DebugDraw, Rgba } from '../render/debugDraw';
 import type { FrameUniforms } from '../render/frameUniforms';
+import type { ShipCameraTarget } from '../camera/shipCamera';
 import { Ship, buildShipModel } from './ship';
 import type { ShipConfig } from './shipConfig';
-import { buildShipVisualMesh } from './shipMesh';
+import { SHIP_VERTEX_FLOATS, bridgeEyePosition, buildShipVisualMesh, type ShipVisualMesh } from './shipMesh';
 import { ShipRenderer } from './shipRenderer';
 import { WaterGridProvider, WaterPointProbe } from './waterGrid';
 
@@ -48,12 +49,36 @@ export class ShipSystem {
   private readonly previousOrientation = new Float64Array(4);
   private readonly renderPosition = new Float64Array(3);
   private readonly renderOrientation = new Float64Array(4);
+  /** Render pose, dimensions and bridge position for the camera rig. */
+  readonly cameraTarget: ShipCameraTarget;
 
   private constructor(
     ship: Ship,
     private readonly renderer: ShipRenderer,
+    visualMesh: ShipVisualMesh,
   ) {
     this.ship = ship;
+    const boundsMin = [Infinity, Infinity, Infinity];
+    const boundsMax = [-Infinity, -Infinity, -Infinity];
+    for (let v = 0; v < visualMesh.vertices.length; v += SHIP_VERTEX_FLOATS) {
+      for (let i = 0; i < 3; i++) {
+        const value = visualMesh.vertices[v + i] as number;
+        boundsMin[i] = Math.min(boundsMin[i] as number, value);
+        boundsMax[i] = Math.max(boundsMax[i] as number, value);
+      }
+    }
+    const renderHeading = (): number => this.renderHeadingRad;
+    this.cameraTarget = {
+      position: this.renderPosition,
+      orientation: this.renderOrientation,
+      centreOfGravity: ship.model.centreOfGravity,
+      boundsMin,
+      boundsMax,
+      bridgeEye: bridgeEyePosition(ship.model.config),
+      get headingRad(): number {
+        return renderHeading();
+      },
+    };
     const hull = ship.model.config.hull;
     this.waterGrid = new WaterGridProvider({
       columns: WATER_GRID_COLUMNS,
@@ -67,13 +92,9 @@ export class ShipSystem {
   static async create(device: GPUDevice, frameUniforms: FrameUniforms, config: ShipConfig): Promise<ShipSystem> {
     const model = buildShipModel(config);
     const ship = new Ship(model, { x: 0, z: 0, headingRad: 0 });
-    const renderer = await ShipRenderer.create(
-      device,
-      frameUniforms,
-      buildShipVisualMesh(config, model.sectionExponent),
-      model.centreOfGravity,
-    );
-    return new ShipSystem(ship, renderer);
+    const visualMesh = buildShipVisualMesh(config, model.sectionExponent);
+    const renderer = await ShipRenderer.create(device, frameUniforms, visualMesh, model.centreOfGravity);
+    return new ShipSystem(ship, renderer, visualMesh);
   }
 
   /** True once the physics runs on heights from the GPU ocean. */
@@ -126,6 +147,16 @@ export class ShipSystem {
     norm = Math.sqrt(norm);
     for (let i = 0; i < 4; i++) this.renderOrientation[i] = (this.renderOrientation[i] as number) / norm;
     return this.renderPosition;
+  }
+
+  /** Heading of the interpolated render pose, clockwise from north (rad). */
+  get renderHeadingRad(): number {
+    const q = this.renderOrientation;
+    // Hull +X in world: first column of the rotation matrix.
+    const w = q[0] as number, x = q[1] as number, y = q[2] as number, z = q[3] as number;
+    const fx = 1 - 2 * (y * y + z * z);
+    const fz = 2 * (x * z - w * y);
+    return Math.atan2(fx, -fz);
   }
 
   prepareDraw(cameraPosition: ArrayLike<number>): void {

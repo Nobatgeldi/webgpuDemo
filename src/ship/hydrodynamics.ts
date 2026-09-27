@@ -6,15 +6,22 @@
  *   C_F = 0.075 / (log10 Re - 2)^2, Re = V L / nu.
  * - Pressure damping: panels moving along their normal feel
  *   -(C_lin v_n + 1/2 rho C_D |v_n| v_n) A n. It stands in for the radiation
- *   damping of heave, pitch, roll, sway and yaw. The ship's forward speed is
+ *   damping of heave, pitch, roll, sway and yaw. The part caused by the
+ *   athwartships velocity acts horizontally only: in crossflow the pressures
+ *   around a V-section have a net lateral, not vertical, resultant (applying
+ *   it along the panel normals would create a spurious roll couple that heels
+ *   the ship into a turn). The ship's forward speed is
  *   excluded once the ship is under way (resistance at speed is friction plus,
  *   from phase 4, wave resistance); at drifting speeds it stays, so that
  *   transient surge impulses die out instead of drifting forever. C_lin is
  *   calibrated so that heave has the configured damping ratio.
+ * - Residuary (wave-making) resistance: 1/2 rho S V^2 C_R(Fn) against the
+ *   forward speed, S the design wetted surface, C_R rising over the Froude
+ *   number range of the main resistance hump.
  * - Roll damping: an extra moment -(B1 p + B2 p|p|) about the longitudinal
  *   axis (bilge keels, viscous roll damping), with B1 from the configured ratio.
  */
-import { SEA_WATER_DENSITY_KG_M3, SEA_WATER_KINEMATIC_VISCOSITY_M2_S } from '../core/constants';
+import { GRAVITY_M_S2, SEA_WATER_DENSITY_KG_M3, SEA_WATER_KINEMATIC_VISCOSITY_M2_S } from '../core/constants';
 import type { SubmergedTriangles } from './buoyancy';
 import type { RigidBody } from './rigidBody';
 
@@ -34,8 +41,32 @@ export function ittcFrictionCoefficient(reynolds: number): number {
   return 0.075 / (log * log);
 }
 
+/** Residuary resistance coefficient at a Froude number (smoothstep rise to the full value). */
+export function residuaryResistanceCoefficient(
+  froude: number,
+  full: number,
+  onsetFroude: number,
+  fullFroude: number,
+): number {
+  const t = Math.min(1, Math.max(0, (froude - onsetFroude) / (fullFroude - onsetFroude)));
+  return full * t * t * (3 - 2 * t);
+}
+
+/** Calm-water resistance at a forward speed: ITTC friction plus residuary resistance (N). */
+export function calmWaterResistance(speedMs: number, k: HydrodynamicCoefficients, density = SEA_WATER_DENSITY_KG_M3): number {
+  const reynolds = (speedMs * k.lengthM) / SEA_WATER_KINEMATIC_VISCOSITY_M2_S;
+  const froude = speedMs / Math.sqrt(GRAVITY_M_S2 * k.lengthM);
+  const cr = residuaryResistanceCoefficient(froude, k.residuaryCoefficient, k.residuaryOnsetFroude, k.residuaryFullFroude);
+  return 0.5 * density * speedMs * speedMs * k.wettedAreaM2 * ((1 + k.formFactor) * ittcFrictionCoefficient(reynolds) + cr);
+}
+
 export interface HydrodynamicCoefficients {
   readonly lengthM: number;
+  /** Wetted surface at the design draft (m^2). */
+  readonly wettedAreaM2: number;
+  readonly residuaryCoefficient: number;
+  readonly residuaryOnsetFroude: number;
+  readonly residuaryFullFroude: number;
   /** Linear panel pressure damping (N s / m^3). */
   readonly linearPanelDamping: number;
   /** Quadratic panel drag coefficient C_D. */
@@ -51,6 +82,8 @@ export interface HydrodynamicTotals {
   readonly friction: Float64Array;
   readonly pressure: Float64Array;
   rollMomentNm: number;
+  /** Residuary resistance along the ship's axis (N, positive = retarding). */
+  residuaryN: number;
 }
 
 export class HydrodynamicModel {
@@ -58,12 +91,15 @@ export class HydrodynamicModel {
     friction: new Float64Array(3),
     pressure: new Float64Array(3),
     rollMomentNm: 0,
+    residuaryN: 0,
   };
   /** Per submerged triangle: friction + pressure force (N), for the debug view. */
   readonly panelForces: Float64Array;
   private readonly velocity = new Float64Array(3);
   private readonly axis = new Float64Array(3);
   private readonly forwardBody = new Float64Array([1, 0, 0]);
+  private readonly starboardBody = new Float64Array([0, 0, 1]);
+  private readonly starboardAxis = new Float64Array(3);
 
   constructor(
     private readonly coefficients: HydrodynamicCoefficients,
@@ -85,6 +121,10 @@ export class HydrodynamicModel {
     const vz = body.velocity[2] as number;
     const speed = Math.hypot(vx, vy, vz);
     const surge = vx * fx + vy * fy + vz * fz;
+    const starboard = body.rotateToWorld(this.starboardBody, this.starboardAxis);
+    const sx = starboard[0] as number;
+    const sy = starboard[1] as number;
+    const sz = starboard[2] as number;
     const exclusionT = Math.min(1, Math.max(0, (Math.abs(surge) - SURGE_EXCLUSION_START_MS) / (SURGE_EXCLUSION_END_MS - SURGE_EXCLUSION_START_MS)));
     const excludedSurge = surge * exclusionT * exclusionT * (3 - 2 * exclusionT);
     const reynolds = (speed * k.lengthM) / SEA_WATER_KINEMATIC_VISCOSITY_M2_S;
@@ -118,13 +158,20 @@ export class HydrodynamicModel {
       const ffy = friction * ty;
       const ffz = friction * tz;
 
-      // Pressure damping on the normal velocity, without the forward speed of the ship.
+      // Pressure damping on the normal velocity, without the forward speed of the ship,
+      // split into the athwartships part (horizontal force) and the rest (along the normal).
       const dampedNormal = normalSpeed - excludedSurge * (fx * nx + fy * ny + fz * nz);
-      const pressure =
-        -(k.linearPanelDamping * dampedNormal + 0.5 * rho * k.panelDragCoefficient * Math.abs(dampedNormal) * dampedNormal) * area;
-      const pfx = pressure * nx;
-      const pfy = pressure * ny;
-      const pfz = pressure * nz;
+      const lateral = ux * sx + uy * sy + uz * sz;
+      const normalAthwartships = nx * sx + ny * sy + nz * sz;
+      const lateralNormal = lateral * normalAthwartships;
+      const otherNormal = dampedNormal - lateralNormal;
+      const damping = (vn: number): number =>
+        -(k.linearPanelDamping * vn + 0.5 * rho * k.panelDragCoefficient * Math.abs(vn) * vn) * area;
+      const alongNormal = damping(otherNormal);
+      const athwartships = damping(lateralNormal) * normalAthwartships;
+      const pfx = alongNormal * nx + athwartships * sx;
+      const pfy = alongNormal * ny + athwartships * sy;
+      const pfz = alongNormal * nz + athwartships * sz;
 
       body.addForceAtPoint(ffx + pfx, ffy + pfy, ffz + pfz, px, py, pz);
       this.panelForces[3 * i] = ffx + pfx;
@@ -137,6 +184,16 @@ export class HydrodynamicModel {
       totals.pressure[1] = (totals.pressure[1] as number) + pfy;
       totals.pressure[2] = (totals.pressure[2] as number) + pfz;
     }
+
+    // Residuary resistance, scaled by how much of the design wetted surface is in the water.
+    let wetArea = 0;
+    for (let i = 0; i < submerged.count; i++) wetArea += submerged.areas[i] as number;
+    const wetFraction = Math.min(1, wetArea / k.wettedAreaM2);
+    const froude = Math.abs(surge) / Math.sqrt(GRAVITY_M_S2 * k.lengthM);
+    const cr = residuaryResistanceCoefficient(froude, k.residuaryCoefficient, k.residuaryOnsetFroude, k.residuaryFullFroude);
+    const residuary = 0.5 * rho * k.wettedAreaM2 * wetFraction * cr * surge * Math.abs(surge);
+    body.addForce(-residuary * fx, -residuary * fy, -residuary * fz);
+    totals.residuaryN = residuary;
 
     // Roll damping about the longitudinal axis (only while the hull is wet).
     if (submerged.count > 0) {

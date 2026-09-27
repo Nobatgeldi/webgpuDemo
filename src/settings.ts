@@ -2,12 +2,15 @@ import type { ToneMapper } from './render/tonemapPass';
 import type { DebugTextureName } from './render/debugTextureView';
 import { DEFAULT_PIXEL_RATIO_CAP } from './render/renderConfig';
 import { beaufortToWindSpeed } from './ocean/beaufort';
+import type { CameraMode } from './camera/shipCamera';
 
 /** Default sea state: moderate breeze (Bf 5) from the south-west over open ocean. */
 const DEFAULT_BEAUFORT = 5;
 const DEFAULT_WIND_DIRECTION_DEG = 225;
 const DEFAULT_FETCH_KM = 300;
 const DEFAULT_CHOPPINESS = 0.9;
+/** Seconds after the last camera input before the follow camera returns to its default angle. */
+const DEFAULT_CAMERA_RETURN_DELAY_S = 3;
 
 /**
  * Runtime-adjustable settings shared between the control panel and the
@@ -26,6 +29,9 @@ export interface AppSettings {
   fetchKm: number;
   /** Horizontal displacement scale lambda of the choppy waves. */
   choppiness: number;
+  // Camera
+  cameraMode: CameraMode;
+  cameraReturnDelayS: number;
   // Display
   /** Exposure adapts to the sky brightness; exposureEv is then a compensation. */
   autoExposure: boolean;
@@ -60,6 +66,7 @@ export const SETTINGS_LIMITS = {
   pixelRatioCap: { min: 0.5, max: 3, step: 0.25 },
   sunElevationDeg: { min: -10, max: 90, step: 0.5 },
   sunAzimuthDeg: { min: 0, max: 360, step: 1 },
+  cameraReturnDelayS: { min: 0.5, max: 30, step: 0.5 },
 } as const;
 
 /** Wind speeds are shown and stored with the panel's 0.1 m/s resolution. */
@@ -75,6 +82,8 @@ export function createDefaultSettings(): AppSettings {
     windDirectionDeg: DEFAULT_WIND_DIRECTION_DEG,
     fetchKm: DEFAULT_FETCH_KM,
     choppiness: DEFAULT_CHOPPINESS,
+    cameraMode: 'follow',
+    cameraReturnDelayS: DEFAULT_CAMERA_RETURN_DELAY_S,
     autoExposure: true,
     exposureEv: 0,
     toneMapper: 'aces',

@@ -79,10 +79,11 @@ src/ship/
   hydrodynamics.ts       ITTC-1957 sürtünme, basınç sürüklemesi, yalpa sönümü  (3)
   shipRenderer.ts        gövde + üst yapı çizimi                               (3)
   propulsion.ts          pervane (RPM gecikmesi, itki) + dümen (C_L, stall, propwash) (4)
+  helm.ts                gaz kolu ve dümen emri (tuş hızı, sıfır tırnağı)      (4)
+src/core/spring.ts       kritik sönümlü yay (tam çözüm), açı sarma             (4)
   wind.ts                bağıl rüzgâr kuvveti ve momenti                       (5)
 src/camera/
-  orbitCamera.ts         F0 orbit kamera                                        (0)
-  thirdPersonCamera.ts   takip / serbest orbit / köprüüstü modları             (4)
+  shipCamera.ts          takip / serbest orbit / köprüüstü modları (F0 orbitCamera'nın yerini aldı) (4)
 src/effects/
   wake.ts                dümen suyu köpük izi (gemi merkezli kayan doku)       (5)
   spray.ts               baş dalgası/sprey compute parçacıkları                (5)
@@ -137,7 +138,7 @@ kırmak için düşük frekanslı modülasyon, FFT/spektrum doku görüntüleyic
 sönüm (ITTC-1957, basınç sürüklemesi, yalpa sönümü), fizik testleri (denge
 draftı ±%5, sürüklenmeme, 15° yalpanın sönümü), debug görselleştirme.
 
-### Faz 4 — Sürüş ve kamera
+### Faz 4 — Sürüş ve kamera ✅
 Pervane (−%50…+%100 gaz, RPM zaman sabiti, sudan çıkınca itki kesilmesi),
 dümen (±35°, ~5°/s, C_L(α) + stall, propwash), klavye kontrolleri,
 third-person kamera (kritik sönümlü yaw takibi, hafif yalpa yansıtma, 3 s sonra

@@ -1,4 +1,4 @@
-import { OrbitCameraController } from './camera/orbitCamera';
+import { CAMERA_MODE_LABELS, ShipCamera } from './camera/shipCamera';
 import { CanvasSizer } from './core/canvasSize';
 import type { GpuContext, GpuErrorReporter } from './core/gpu';
 import { GpuTimer } from './core/gpuTimer';
@@ -40,8 +40,6 @@ const FPS_WINDOW_MS = 500;
 /** Smoothing of the CPU frame time readout (frames). */
 const CPU_TIME_SMOOTHING_FRAMES = 30;
 
-/** Camera clearance above the water surface below it (m). */
-const CAMERA_MIN_CLEARANCE_M = 1.5;
 /**
  * Before the first water query result arrives, a conservative crest height
  * (this multiple of Hs above sea level) is assumed instead.
@@ -57,6 +55,14 @@ const METRES_PER_KM = 1000;
 const KEY_PAUSE = 'KeyP';
 const KEY_TOGGLE_UI = 'KeyH';
 const KEY_TOGGLE_DEBUG = 'KeyF';
+const KEY_CAMERA_MODE = 'KeyC';
+/** Helm keys (physical positions; arrows as alternatives). */
+const KEYS_THROTTLE_UP = ['KeyW', 'ArrowUp'];
+const KEYS_THROTTLE_DOWN = ['KeyS', 'ArrowDown'];
+const KEYS_RUDDER_PORT = ['KeyA', 'ArrowLeft'];
+const KEYS_RUDDER_STARBOARD = ['KeyD', 'ArrowRight'];
+const KEY_RUDDER_CENTRE = 'Space';
+const MS_PER_S = 1000;
 
 /** Clear colour of the HDR target; every pixel is overwritten by the sky pass. */
 const HDR_CLEAR_COLOR: GPUColor = [0, 0, 0, 1];
@@ -97,7 +103,7 @@ export class App {
   private readonly settings: AppSettings;
   private readonly clock = new SimClock(1 / SIMULATION_RATE_HZ);
   private readonly camera = new Camera();
-  private readonly orbit = new OrbitCameraController();
+  private readonly shipCamera = new ShipCamera();
   private readonly input: Input;
   private readonly sizer: CanvasSizer;
   private readonly targets: RenderTargets;
@@ -231,6 +237,18 @@ export class App {
 
   /** One fixed simulation step. */
   private step(): void {
+    const anyDown = (codes: readonly string[]): boolean => codes.some((code) => this.input.isDown(code));
+    this.shipSystem.ship.helm.update(
+      {
+        throttleUp: anyDown(KEYS_THROTTLE_UP),
+        throttleDown: anyDown(KEYS_THROTTLE_DOWN),
+        port: anyDown(KEYS_RUDDER_PORT),
+        starboard: anyDown(KEYS_RUDDER_STARBOARD),
+        // A short tap may fall between two simulation steps; count it too.
+        centre: this.input.isDown(KEY_RUDDER_CENTRE) || this.input.wasPressed(KEY_RUDDER_CENTRE),
+      },
+      this.clock.stepSeconds,
+    );
     this.shipSystem.step(this.clock.stepSeconds, this.clock.time);
     this.clock.advance();
     this.wind.setTarget(this.settings.windSpeedMs, this.settings.windDirectionDeg * DEG_TO_RAD);
@@ -249,15 +267,22 @@ export class App {
       fetchM: this.settings.fetchKm * METRES_PER_KM,
       choppiness: this.settings.choppiness,
     });
-    // The camera orbits the ship's (interpolated) centre of gravity.
-    this.orbit.target.set(this.shipSystem.updateRenderPose(this.settings.paused ? 1 : frame.alpha));
-    this.orbit.handleInput(this.input);
+    // The camera follows the ship's pose interpolated to the render instant.
+    this.shipSystem.updateRenderPose(this.settings.paused ? 1 : frame.alpha);
+    const target = this.shipSystem.cameraTarget;
+    if (this.settings.cameraMode !== this.shipCamera.mode) {
+      this.shipCamera.setMode(this.settings.cameraMode, target);
+    }
+    this.shipCamera.handleInput(this.input);
     const waterBelowCamera = this.shipSystem.cameraWaterHeight;
-    const minAltitude =
-      waterBelowCamera === null
-        ? CAMERA_MIN_CLEARANCE_M + CAMERA_CREST_ALLOWANCE_PER_HS * this.ocean.significantWaveHeightM
-        : waterBelowCamera + CAMERA_MIN_CLEARANCE_M;
-    this.orbit.update(this.camera, frame.frameSeconds, minAltitude);
+    this.shipCamera.update(this.camera, target, {
+      dt: frame.frameSeconds,
+      // Before the first water query result, a conservative crest height is assumed.
+      waterHeightM:
+        waterBelowCamera ?? CAMERA_CREST_ALLOWANCE_PER_HS * this.ocean.significantWaveHeightM,
+      secondsSinceInput: (frame.timestampMs - this.input.lastCameraInteractionMs) / MS_PER_S,
+      returnDelayS: this.settings.cameraReturnDelayS,
+    });
 
     this.renderScene(frame);
 
@@ -274,6 +299,11 @@ export class App {
     }
     if (this.input.wasPressed(KEY_TOGGLE_UI)) {
       this.settings.uiVisible = !this.settings.uiVisible;
+      changed = true;
+    }
+    if (this.input.wasPressed(KEY_CAMERA_MODE)) {
+      this.shipCamera.cycleMode(this.shipSystem.cameraTarget);
+      this.settings.cameraMode = this.shipCamera.mode;
       changed = true;
     }
     if (this.input.wasPressed(KEY_TOGGLE_DEBUG)) {
@@ -386,6 +416,8 @@ export class App {
       this.debugOverlay.setVisible(this.settings.debugOverlay);
     }
     const now = frame.timestampMs;
+    const ship = this.shipSystem.ship;
+    const config = ship.model.config;
     this.hud.update(
       {
         sea: {
@@ -396,11 +428,18 @@ export class App {
           significantWaveHeightM: this.ocean.significantWaveHeightM,
         },
         ship: {
-          rollDeg: this.shipSystem.ship.rollRad * RAD_TO_DEG,
-          pitchDeg: this.shipSystem.ship.pitchRad * RAD_TO_DEG,
-          headingDeg: this.shipSystem.ship.headingRad * RAD_TO_DEG,
-          speedKnots: this.shipSystem.ship.speedMs / KNOTS_TO_MS,
+          rollDeg: ship.rollRad * RAD_TO_DEG,
+          pitchDeg: ship.pitchRad * RAD_TO_DEG,
+          headingDeg: ship.headingRad * RAD_TO_DEG,
+          speedKnots: ship.speedMs / KNOTS_TO_MS,
+          throttle: ship.helm.throttle,
+          minThrottle: config.propulsion.minThrottle,
+          rpm: ship.propulsion.state.rpm,
+          rudderOrderDeg: ship.helm.rudderOrderRad * RAD_TO_DEG,
+          rudderAngleDeg: ship.propulsion.state.rudderAngleRad * RAD_TO_DEG,
+          maxRudderDeg: config.rudder.maxAngleRad * RAD_TO_DEG,
         },
+        cameraModeLabel: CAMERA_MODE_LABELS[this.shipCamera.mode],
         fps: this.fps.rate,
         cpuFrameMs: this.cpuFrameMs.value,
         gpuFrameMs: this.timer.frameMs,
@@ -420,6 +459,7 @@ export class App {
     const model = ship.model;
     const hs = model.hydrostatics;
     const b = ship.buoyancy.result;
+    const prop = ship.propulsion.state;
     const fmt = (v: number, d = 2): string => v.toFixed(d);
     return {
       title: 'Ship',
@@ -431,6 +471,12 @@ export class App {
         `physics mesh: ${model.physicsMesh.triangleCount} tris, submerged pieces ${ship.buoyancy.submerged.count}, ` +
           `water from ${this.shipSystem.waterReady ? 'GPU' : 'flat fallback'}`,
         `draft ${fmt(ship.draftM)} m, displaced ${fmt(b.submergedVolumeM3, 1)} m³, heave v ${fmt(ship.body.velocity[1] as number)} m/s`,
+        `propulsion: throttle ${fmt(ship.helm.throttle * 100, 0)} %, ${fmt(prop.rpm, 0)} rpm, thrust ${fmt(prop.thrustN / 1000, 1)} kN, ` +
+          `prop immersion ${fmt(prop.propellerImmersion * 100, 0)} %`,
+        `rudder: order ${fmt(ship.helm.rudderOrderRad * RAD_TO_DEG, 1)}°, angle ${fmt(prop.rudderAngleRad * RAD_TO_DEG, 1)}°, ` +
+          `AoA ${fmt(prop.rudderAngleOfAttackRad * RAD_TO_DEG, 1)}°, side force ${fmt(prop.rudderSideForceN / 1000, 1)} kN`,
+        `resistance: residuary ${fmt(ship.hydrodynamics.totals.residuaryN / 1000, 1)} kN, surge ${fmt(ship.surgeSpeedMs)} m/s, ` +
+          `calibration T0 ${fmt(model.propeller.bollardThrustN / 1000, 0)} kN, Vref ${fmt(model.propeller.referenceSpeedMs)} m/s`,
         `camera water height: ${this.shipSystem.cameraWaterHeight === null ? '–' : `${fmt(this.shipSystem.cameraWaterHeight)} m`}`,
       ],
     };
@@ -504,6 +550,7 @@ export class App {
           `position: ${fmt(p[0] as number)}, ${fmt(p[1] as number)}, ${fmt(p[2] as number)} m`,
           `forward: ${fmt(f[0] as number, 3)}, ${fmt(f[1] as number, 3)}, ${fmt(f[2] as number, 3)}`,
           `near/far: ${this.camera.near} / ${this.camera.far} m (reversed Z)`,
+          `mode: ${this.shipCamera.mode}, distance ${fmt(this.shipCamera.distanceM, 0)} m`,
         ],
       },
       {

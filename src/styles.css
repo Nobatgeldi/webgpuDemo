@@ -52,7 +52,8 @@ body {
   position: fixed;
   left: 12px;
   bottom: 12px;
-  min-width: 220px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
   padding: 10px 12px;
   border: 1px solid var(--overlay-border);
   border-radius: 8px;
@@ -91,6 +92,137 @@ body {
   color: var(--overlay-muted);
   font-family: var(--sans);
   font-size: 11px;
+}
+
+/* Compass and helm */
+
+.hud-helm {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  margin-bottom: 8px;
+}
+
+.hud-gauges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hud-compass {
+  width: 120px;
+  height: 120px;
+  overflow: visible;
+}
+
+.compass-ring {
+  fill: rgba(0, 0, 0, 0.25);
+  stroke: var(--overlay-border);
+  stroke-width: 1.5;
+}
+
+.compass-tick {
+  stroke: var(--overlay-muted);
+  stroke-width: 1.2;
+}
+
+.compass-label {
+  fill: var(--overlay-text);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.compass-north {
+  fill: var(--danger);
+}
+
+.compass-wind line {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.compass-wind polygon {
+  fill: var(--accent);
+}
+
+.compass-ship {
+  fill: var(--warn);
+}
+
+.compass-heading {
+  fill: var(--overlay-text);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.hud-throttle {
+  position: relative;
+  width: 12px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.hud-throttle-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--accent);
+}
+
+.hud-throttle-fill.astern {
+  background: var(--warn);
+}
+
+.hud-throttle-zero {
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  height: 1px;
+  background: var(--overlay-text);
+}
+
+.hud-rudder {
+  position: relative;
+  width: 120px;
+  height: 10px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.hud-rudder-centre,
+.hud-rudder-angle,
+.hud-rudder-order {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+}
+
+.hud-rudder-centre {
+  left: 50%;
+  background: var(--overlay-muted);
+}
+
+.hud-rudder-angle {
+  background: var(--warn);
+}
+
+.hud-rudder-order {
+  top: auto;
+  bottom: -6px;
+  width: 0;
+  height: 0;
+  margin-left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 5px solid var(--overlay-text);
 }
 
 /* ---------- Debug overlay ---------- */

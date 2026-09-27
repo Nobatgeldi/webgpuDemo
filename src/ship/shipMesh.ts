@@ -30,11 +30,23 @@ interface Box {
   readonly material: ShipMaterial;
 }
 
+/** Hull length the superstructure layout below is drawn for (m); other lengths scale it. */
+const LAYOUT_REFERENCE_LENGTH_M = 50;
+/** Bridge eye point: just ahead of the front windows, at eye height (layout metres). */
+const BRIDGE_EYE_X_M = 6.4;
+const BRIDGE_EYE_ABOVE_DECK_M = 4.1;
+
+/** Eye point of the bridge camera in the hull frame. */
+export function bridgeEyePosition(config: ShipConfig): [number, number, number] {
+  const s = config.hull.lengthM / LAYOUT_REFERENCE_LENGTH_M;
+  return [BRIDGE_EYE_X_M * s, hullSection(config.hull, 0).deckHeightM + BRIDGE_EYE_ABOVE_DECK_M, 0];
+}
+
 /** Superstructure layout relative to the hull length/breadth (hull frame, metres for a 50 m hull). */
 function superstructure(config: ShipConfig): Box[] {
   const { lengthM: l, beamM: b } = config.hull;
   const deck = hullSection(config.hull, 0).deckHeightM;
-  const s = l / 50; // scale for other hull lengths
+  const s = l / LAYOUT_REFERENCE_LENGTH_M;
   const base = deck - 0.2; // sink the boxes slightly into the deck
   return [
     // Main deckhouse and bridge.

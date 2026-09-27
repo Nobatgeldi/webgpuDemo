@@ -62,6 +62,51 @@ export interface HydrodynamicsConfig {
   readonly panelNormalDragCoefficient: number;
   /** ITTC form factor k in (1 + k) C_F. */
   readonly formFactor: number;
+  /**
+   * Residuary (mainly wave-making) resistance coefficient C_R, based on the
+   * design wetted surface; it grows from zero at `residuaryOnsetFroude` to its
+   * full value at `residuaryFullFroude` (the main hump of a fast displacement hull).
+   */
+  readonly residuaryResistanceCoefficient: number;
+  readonly residuaryOnsetFroude: number;
+  readonly residuaryFullFroude: number;
+}
+
+export interface PropulsionConfig {
+  readonly propellerDiameterM: number;
+  /** Propeller centre in the hull frame (m). */
+  readonly propellerPosition: readonly [number, number, number];
+  readonly maxRpm: number;
+  /** First-order time constant of the shaft speed (s). */
+  readonly rpmTimeConstantS: number;
+  /** Throttle range: astern (negative) to full ahead. */
+  readonly minThrottle: number;
+  readonly maxThrottle: number;
+  /** Taylor wake fraction: advance speed = (1 - w) ship speed. */
+  readonly wakeFraction: number;
+  /** Bollard-pull thrust relative to the resistance at the design (top) speed. */
+  readonly bollardThrustRatio: number;
+  /** Thrust going astern relative to ahead at the same |rpm|. */
+  readonly asternEfficiency: number;
+}
+
+export interface RudderConfig {
+  readonly areaM2: number;
+  readonly aspectRatio: number;
+  /** Rudder stock/centre of pressure in the hull frame (m). */
+  readonly position: readonly [number, number, number];
+  readonly maxAngleRad: number;
+  /** Steering gear rate (rad/s). */
+  readonly rateRadPerS: number;
+  /** Angle of attack at which the rudder stalls (rad). */
+  readonly stallAngleRad: number;
+  /** Lift left after the stall, relative to the peak (at 90 degrees). */
+  readonly postStallLiftFraction: number;
+  /** Profile drag coefficient and Oswald efficiency for induced drag. */
+  readonly profileDragCoefficient: number;
+  readonly spanEfficiency: number;
+  /** Share of the propeller slipstream speed-up that reaches the rudder. */
+  readonly propwashFraction: number;
 }
 
 export interface ShipConfig {
@@ -69,6 +114,8 @@ export interface ShipConfig {
   readonly hull: HullFormConfig;
   readonly mass: MassConfig;
   readonly hydrodynamics: HydrodynamicsConfig;
+  readonly propulsion: PropulsionConfig;
+  readonly rudder: RudderConfig;
   /** Nominal top speed (knots); used by propulsion from phase 4. */
   readonly maxSpeedKnots: number;
 }
@@ -106,6 +153,32 @@ export const PATROL_BOAT: ShipConfig = {
     rollQuadraticDampingNms2: 2.0e6,
     panelNormalDragCoefficient: 1.0,
     formFactor: 0.1,
+    residuaryResistanceCoefficient: 0.0068,
+    residuaryOnsetFroude: 0.15,
+    residuaryFullFroude: 0.5,
+  },
+  propulsion: {
+    propellerDiameterM: 2.0,
+    propellerPosition: [-22.0, -1.6, 0],
+    maxRpm: 900,
+    rpmTimeConstantS: 4,
+    minThrottle: -0.5,
+    maxThrottle: 1,
+    wakeFraction: 0.1,
+    bollardThrustRatio: 1.7,
+    asternEfficiency: 0.6,
+  },
+  rudder: {
+    areaM2: 2.8,
+    aspectRatio: 1.5,
+    position: [-24.2, -1.5, 0],
+    maxAngleRad: 35 * DEG_TO_RAD,
+    rateRadPerS: 5 * DEG_TO_RAD,
+    stallAngleRad: 32 * DEG_TO_RAD,
+    postStallLiftFraction: 0.55,
+    profileDragCoefficient: 0.02,
+    spanEfficiency: 0.9,
+    propwashFraction: 0.5,
   },
   maxSpeedKnots: 22,
 };

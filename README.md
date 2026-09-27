@@ -55,7 +55,11 @@ Worker adı ve ayarları `wrangler.jsonc` içindedir. CI'da dağıtım için
 
 | Girdi | İşlev |
 |---|---|
-| Fare sürükle | Kamerayı hedef etrafında döndür |
+| W / S (veya ↑ / ↓) | Gaz kolunu ileri / geri al (kol bırakıldığı yerde kalır; −%50…+%100, sıfırda durur) |
+| A / D (veya ← / →) | Dümeni iskeleye / sancağa (emir ±35°, ~20°/s) |
+| Boşluk | Dümeni ortala |
+| C | Kamera modu: takip → serbest yörünge → köprüüstü |
+| Fare sürükle | Kamerayı döndür (köprüüstünde etrafa bak) |
 | Tekerlek | Yakınlaş / uzaklaş (30–400 m) |
 | P | Simülasyonu duraklat / sürdür |
 | H | Arayüzü gizle / göster |
@@ -63,8 +67,15 @@ Worker adı ve ayarları `wrangler.jsonc` içindedir. CI'da dağıtım için
 
 Ayar panelindeki **Rüzgâr ve deniz** bölümünde Beaufort (0–12) ve m/s (0–40)
 kaydırıcıları birbirine senkrondur; rüzgâr yönü, fetch ve dalga keskinliği
-(choppiness) de buradan ayarlanır. Gemi kontrolleri (W/S gaz, A/D dümen, Space
-dümeni ortala, C kamera modu) Faz 4'te eklenecek.
+(choppiness) de buradan ayarlanır. **Kamera** bölümünde mod ve takip kamerasının
+son girdiden kaç saniye sonra varsayılan açıya döneceği (varsayılan 3 s)
+seçilir.
+
+HUD: gemi yukarı pusula (K/D/G/B; mavi ok rüzgârın *geldiği* yönü gemiye göre
+gösterir), gaz kolu çubuğu (sarı = tornistan), dümen göstergesi (üçgen = emir,
+sarı çizgi = gerçek dümen açısı), hız (kn), rota, makine (% ve d/dk), dümen,
+yalpa/baş-kıç, rüzgâr (Bf, m/s, yön), bağıl rüzgâr, Hs, kamera modu, FPS ve GPU
+süresi.
 
 ## URL parametreleri
 
@@ -102,13 +113,14 @@ src/
   sky/               atmosphereModel (fiziksel atmosfer, CPU referansı), atmosphere
                      (transmittance/sky-view LUT'ları, gökyüzü ışınımı), skyPass
   ship/              shipConfig, hull (parametrik gövde), hydrostatics, rigidBody (6DOF),
-                     buoyancy (Kerner üçgen kesme), hydrodynamics (ITTC-1957, sönüm),
+                     buoyancy (Kerner üçgen kesme), hydrodynamics (ITTC-1957, dalga
+                     direnci, sönüm), propulsion (pervane + dümen), helm (gaz kolu/dümen emri),
                      waterHeightProvider (arayüz + analitik su), waterGrid (GPU su ızgarası),
                      ship, shipMesh/shipRenderer (görsel model), shipSystem (birleştirici)
   ocean/             beaufort, spectrumModel (JONSWAP + Donelan-Banner, CPU referansı),
                      windState, fftReference, spectrum/fft/cascades (GPU simülasyonu),
                      oceanMesh (clipmap), oceanPass (çizim), ocean (birleştirici)
-  camera/            orbitCamera
+  camera/            shipCamera (takip / serbest yörünge / köprüüstü)
   input/             klavye/fare durumu
   ui/                panel (lil-gui), hud, debugOverlay, errorScreen
   shaders/           *.wgsl (Vite ?raw ile içe aktarılır)
@@ -222,9 +234,17 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 - **Dalga keskinliği:** Varsayılan λ = 0.9; yatay yer değiştirme D = i(k/|k|)h
   olarak tanımlandığından pozitif λ tepeleri sivriltir (Gerstner benzeri).
 - **Hs (HUD):** Sürekli spektrumun tamamından (4√m0) hesaplanır.
-- **Kamera:** Orbit kamera geminin ağırlık merkezini izler ve altındaki su
-  yüzeyinin (GPU sorgusu) en az 1.5 m üstünde tutulur; ilk sonuç gelene kadar
-  deniz seviyesi + 1.5 m + 1.2·Hs varsayılır.
+- **Kamera:** Takip modunda kamera geminin rotasını kritik sönümlü bir yayla
+  (ω = 1.6 rad/s, ~2 s'de oturur) izler; varsayılan açı kıçın 25° sancak
+  omuzluğundan, ufkun 14° üstünden. Kullanıcı sürükledikten sonra ayarlanan
+  süre (3 s) geçince açı ω = 1.2 rad/s'lik yayla varsayılana döner; yakınlaştırma
+  korunur. Bakış noktasının yüksekliği yumuşatılır (dalıp çıkma kamerayı
+  sallamaz) ve geminin yalpa/baş-kıç eğiminin yalnızca %15'i ufka yansır.
+  Kamera altındaki su yüzeyinin (GPU sorgusu) en az 1.5 m üstünde ve gövde +
+  üst yapının sınır kutusunun 2 m dışında tutulur (kutunun en yakın yüzüne
+  itilir). İlk su sorgusu sonucu gelene kadar su yüksekliği 1.2·Hs varsayılır.
+  Köprüüstü kamerası ön camların hemen önünde, göz hizasında (güverte + 4.1 m)
+  geminin tam yönelimiyle hareket eder; sürüklemeyle ±160°/±60° bakılabilir.
 
 ### Gemi
 - **Boyutlar:** 50 m × 9 m, draft 2.5 m, 500 t, fribord 2.6 m, GM 1.2 m.
@@ -236,9 +256,35 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
   çıkma 2.3 s.
 - **Sönüm:** Panel basınç sönümü dalıp çıkmada ζ = 0.2 verecek şekilde
   kalibre edilir (gerçekte ışınım sönümü); geminin ileri hızı 0.3–1.5 m/s
-  üstünde bu sönümden çıkarılır (seyirde direnç sürtünme + Faz 4'te dalga
-  direnci). Ek yalpa sönümü ζ = 0.05 doğrusal + karesel terim (yalpa omurgaları).
+  üstünde bu sönümden çıkarılır (seyirde direnç = sürtünme + dalga direnci).
+  Ek yalpa sönümü ζ = 0.05 doğrusal + karesel terim (yalpa omurgaları).
   Eklenmiş kütle yalnızca yalpada modellenmiştir.
+- **Yanal sönüm:** Panellerin enine (sancak–iskele) hız bileşenine karşı
+  sönümü, V gövdenin eğik panel normalleri yerine yatay (geminin enine ekseni)
+  doğrultuda uygulanır. Aksi halde dönüşte yanal akışın eğik normallerdeki
+  bileşenleri gemiyi içe yatıran sahte bir moment üretiyordu; gerçek gemilerde
+  dönüşte dışa yatma görülür.
+- **Direnç:** R = ½ρSV²·[(1 + k)·C_F(ITTC-1957) + C_R], k = 0.1; dalga direnci
+  katsayısı C_R = 0.0068, Froude 0.15'ten 0.5'e düzgün artar (hızlı deplasman
+  teknesinin ana tümseği). 22 kn'da toplam ≈ 250 kN.
+- **Pervane:** D = 2.0 m, kıçta (x = −22 m, y = −1.6 m), maks. 900 d/dk,
+  devir gaza τ = 4 s birinci derece gecikmeyle uyar. İtki
+  T = T0·(n|n|·e − |n|·Va/Vref)·batıklık; n = d/dk ÷ maks., iz payı w = 0.1
+  (Va = 0.9·V), tornistanda verim e = 0.6. Bollard itkisi T0 dizayn hızındaki
+  direncin 1.7 katıdır; Vref tam gazda dizayn hızında (22 kn) itki = direnç
+  olacak şekilde hesaplanır (ölçülen azami hız ≈ 21.9 kn). Pervane diski su
+  dışına çıktıkça itki batık oranla orantılı kesilir.
+- **Dümen:** 2.8 m², açıklık oranı 1.5, stok x = −24.2 m; ±35°, 5°/s. C_L
+  eğimi 2π·AR/(AR + 2), stall 32°'de, sonrasında 90°'de tepe değerin %55'ine
+  doğrusal düşüş; profil + indüklenmiş (e = 0.9) + stall sonrası sürükleme.
+  Dümene gelen akış yerel su hızına pervane akımının momentum teorisindeki
+  hızlanmasının yarısı (propwash payı 0.5) eklenerek bulunur; böylece dururken
+  de gaz verince dümen etkilidir. Hücum açısı dümen açısı + yanal akış açısı.
+  Sonuç: tam yolda (~22 kn) 35° dümende dönüş çapı ≈ 4.8 L, dışa yatma ≈ 15°.
+- **Gaz kolu:** W/S tuşları kolu 0.4/s hızla hareket ettirir; kol ileriden
+  tornistana geçerken sıfırda durur (tuş bırakılıp yeniden basılmalı). Dümen
+  emri 20°/s hızla değişir; gerçek dümen açısı dümen makinesinin 5°/s hızıyla
+  emri izler.
 - **Su ızgarası:** Gemi çevresinde 8 m pay, 40 × 16 örnek (~1.7 m aralık); daha
   kısa dalgalar yüzerlikte ortalanır.
 - **Güverte kapalıdır:** Fizik ve görsel gövde kapalı olduğundan gövde içinde su
@@ -269,8 +315,13 @@ asenkron okunur; render döngüsü hiçbir zaman GPU'yu beklemez.
 
 ## Bilinen sınırlamalar
 
-- Sürüş (pervane, dümen), kamera modları ve gemiye rüzgâr kuvveti henüz yok
-  (Faz 4–5).
+- Gemiye rüzgâr kuvveti, dümen suyu izi ve sprey henüz yok (Faz 5).
+- Manevra modeli yarı-deneyseldir: gövdenin yanal kaldırma kuvveti (Munk
+  momenti, çapraz akış) ayrı olarak modellenmez, panel sönümünden gelir; dönüş
+  çapı hedef aralığın (3–5 L) üst kısmında, tek pervane dönme yönü (propeller walk)
+  yok.
+- Köprüüstü kamerası üst yapının içinden değil ön camın hemen önünden bakar
+  (iç mekân modeli yok).
 - Hidrodinamik sönüm su parçacığı (yörünge) hızlarını hesaba katmaz; bu yüzden
   dalgalarda geminin yavaş ortalama sürüklenmesi (düzensiz denizde ~0.2 m/s)
   yön olarak fiziksel değildir. Slamming ve yeşil su (güverteye su) etkileri yok.

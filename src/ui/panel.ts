@@ -3,6 +3,7 @@ import { SETTINGS_LIMITS, roundWindSpeed, type AppSettings } from '../settings';
 import type { ToneMapper } from '../render/tonemapPass';
 import type { DebugTextureName } from '../render/debugTextureView';
 import { beaufortToWindSpeed, windSpeedToBeaufort } from '../ocean/beaufort';
+import { CAMERA_MODES, CAMERA_MODE_LABELS, type CameraMode } from '../camera/shipCamera';
 
 const DEBUG_TEXTURE_OPTIONS: Record<string, DebugTextureName> = {
   Kapalı: 'none',
@@ -55,6 +56,14 @@ export class ControlPanel {
     sea
       .add(settings, 'choppiness', L.choppiness.min, L.choppiness.max, L.choppiness.step)
       .name('Dalga keskinliği');
+
+    const camera = this.gui.addFolder('Kamera');
+    const modeOptions: Record<string, CameraMode> = {};
+    for (const mode of CAMERA_MODES) modeOptions[CAMERA_MODE_LABELS[mode]] = mode;
+    camera.add(settings, 'cameraMode', modeOptions).name('Mod (C)');
+    camera
+      .add(settings, 'cameraReturnDelayS', L.cameraReturnDelayS.min, L.cameraReturnDelayS.max, L.cameraReturnDelayS.step)
+      .name('Varsayılana dönüş (s)');
 
     const sun = this.gui.addFolder('Güneş ve gökyüzü');
     sun

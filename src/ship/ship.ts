@@ -8,6 +8,8 @@ import { buildHullMesh, type HullMesh } from './hull';
 import { HydrodynamicModel, type HydrodynamicCoefficients } from './hydrodynamics';
 import { computeHydrostatics, fitSectionExponent, type Hydrostatics } from './hydrostatics';
 import { RigidBody, multiplyQuaternions, quaternionFromAxisAngle } from './rigidBody';
+import { Helm } from './helm';
+import { Propulsion, calibratePropeller, type PropellerCalibration } from './propulsion';
 import type { ShipConfig } from './shipConfig';
 import type { WaterHeightProvider } from './waterHeightProvider';
 
@@ -29,6 +31,7 @@ export interface ShipModel {
   readonly naturalRollPeriodS: number;
   /** Undamped natural heave period estimate 2 pi sqrt(m / (rho g A_wp)) (s). */
   readonly naturalHeavePeriodS: number;
+  readonly propeller: PropellerCalibration;
 }
 
 export function buildShipModel(config: ShipConfig): ShipModel {
@@ -64,13 +67,19 @@ export function buildShipModel(config: ShipConfig): ShipModel {
   const probe = new BuoyancySolver(physicsMesh.positions, physicsMesh.indices);
   probe.apply(new RigidBody(1, [1, 1, 1]), { heightAt: () => 0 }, 0);
   let verticalProjection = 0;
+  let wettedAreaM2 = 0;
   for (let i = 0; i < probe.submerged.count; i++) {
     const ny = probe.submerged.normals[3 * i + 1] as number;
     verticalProjection += (probe.submerged.areas[i] as number) * ny * ny;
+    wettedAreaM2 += probe.submerged.areas[i] as number;
   }
   const rollStiffness = rho * g * hydrostatics.volumeM3 * mass.metacentricHeightM;
   const coefficients: HydrodynamicCoefficients = {
     lengthM: form.lengthM,
+    wettedAreaM2,
+    residuaryCoefficient: hydrodynamics.residuaryResistanceCoefficient,
+    residuaryOnsetFroude: hydrodynamics.residuaryOnsetFroude,
+    residuaryFullFroude: hydrodynamics.residuaryFullFroude,
     linearPanelDamping: heaveDamping / verticalProjection,
     panelDragCoefficient: hydrodynamics.panelNormalDragCoefficient,
     formFactor: hydrodynamics.formFactor,
@@ -89,6 +98,7 @@ export function buildShipModel(config: ShipConfig): ShipModel {
     coefficients,
     naturalRollPeriodS: 2 * Math.PI * Math.sqrt(rollInertia / rollStiffness),
     naturalHeavePeriodS: 2 * Math.PI * Math.sqrt(m / heaveStiffness),
+    propeller: calibratePropeller(config.propulsion, config.maxSpeedKnots, coefficients),
   };
 }
 
@@ -109,6 +119,9 @@ export class Ship {
   readonly body: RigidBody;
   readonly buoyancy: BuoyancySolver;
   readonly hydrodynamics: HydrodynamicModel;
+  readonly propulsion: Propulsion;
+  /** Current helm orders (throttle lever and ordered rudder angle). */
+  readonly helm: Helm;
   private readonly scratch = new Float64Array(3);
   private readonly axis = new Float64Array(3);
 
@@ -119,6 +132,13 @@ export class Ship {
     this.body = new RigidBody(model.config.mass.massKg, model.inertia);
     this.buoyancy = new BuoyancySolver(model.bodyVertices, model.physicsMesh.indices);
     this.hydrodynamics = new HydrodynamicModel(model.coefficients, this.buoyancy.submerged.capacity);
+    this.helm = new Helm(model.config.propulsion, model.config.rudder);
+    this.propulsion = new Propulsion(
+      model.config.propulsion,
+      model.config.rudder,
+      model.propeller,
+      model.centreOfGravity,
+    );
     this.place(placement);
   }
 
@@ -139,6 +159,12 @@ export class Ship {
     body.angularVelocity.fill(0);
   }
 
+  /** Sets the forward speed (m/s) along the current heading, e.g. to start a test under way. */
+  setForwardSpeed(speedMs: number): void {
+    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    for (let i = 0; i < 3; i++) this.body.velocity[i] = speedMs * (forward[i] as number);
+  }
+
   /** Advances the simulation by one fixed step. */
   step(dt: number, water: WaterHeightProvider, timeS: number): void {
     const body = this.body;
@@ -146,6 +172,7 @@ export class Ship {
     body.addForce(0, -body.mass * GRAVITY_M_S2, 0);
     this.buoyancy.apply(body, water, timeS);
     this.hydrodynamics.apply(body, this.buoyancy.submerged);
+    this.propulsion.apply(body, this.helm, water, timeS, dt);
     body.integrate(dt);
   }
 
@@ -181,6 +208,13 @@ export class Ship {
     out[1] = y - cog[1];
     out[2] = z - cog[2];
     return this.body.pointToWorld(out, out);
+  }
+
+  /** Speed through the water along the ship's axis (m/s, negative astern). */
+  get surgeSpeedMs(): number {
+    const forward = this.body.rotateToWorld([1, 0, 0], this.axis);
+    const v = this.body.velocity;
+    return (v[0] as number) * (forward[0] as number) + (v[1] as number) * (forward[1] as number) + (v[2] as number) * (forward[2] as number);
   }
 
   /** Speed over ground (m/s). */
