@@ -43,3 +43,19 @@ describe('ExponentialAverage', () => {
     expect(average.value).toBe(2);
   });
 });
+
+describe('FrameTimeStats', () => {
+  it('summarises the last frames with mean, percentile and maximum', async () => {
+    const { FrameTimeStats } = await import('../src/core/time');
+    const stats = new FrameTimeStats(100);
+    expect(stats.summary()).toBeNull();
+    // 200 frames: only the last 100 count (values 101..200 ms).
+    for (let i = 1; i <= 200; i++) stats.push(i);
+    const s = stats.summary();
+    expect(s?.count).toBe(100);
+    expect(s?.meanMs).toBeCloseTo(150.5, 9);
+    expect(s?.p95Ms).toBe(195);
+    expect(s?.maxMs).toBe(200);
+    expect(s?.meanFps).toBeCloseTo(1000 / 150.5, 9);
+  });
+});

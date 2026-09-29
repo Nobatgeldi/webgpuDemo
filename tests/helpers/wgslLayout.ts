@@ -17,8 +17,44 @@ const TYPE_LAYOUTS: Record<string, TypeLayout> = {
   'vec3<f32>': { align: 16, size: 12 },
   'vec4<f32>': { align: 16, size: 16 },
   'vec4<u32>': { align: 16, size: 16 },
+  'vec4<i32>': { align: 16, size: 16 },
   'mat4x4<f32>': { align: 16, size: 64 },
 };
+
+/** Splits struct members at commas that are not inside template arguments (array<T, N>). */
+function splitTopLevel(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of body) {
+    if (char === '<') depth++;
+    if (char === '>') depth--;
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts;
+}
+
+function typeLayout(type: string): TypeLayout | undefined {
+  // Fixed-size arrays: element stride is the element size rounded up to its alignment
+  // (uniform address space additionally requires 16-byte alignment).
+  const array = /^array<(.+),(\d+)>$/.exec(type);
+  if (array) {
+    const element = typeLayout(array[1] as string);
+    if (!element) {
+      return undefined;
+    }
+    const align = Math.max(element.align, 16);
+    const stride = Math.ceil(element.size / align) * align;
+    return { align, size: stride * Number(array[2]) };
+  }
+  return TYPE_LAYOUTS[type];
+}
 
 export interface StructLayout {
   /** Byte offset of every member. */
@@ -38,17 +74,17 @@ export function computeStructLayout(source: string, structName: string): StructL
   const offsets: Record<string, number> = {};
   let offset = 0;
   let structAlign = 1;
-  for (const member of body.split(',')) {
+  for (const member of splitTopLevel(body)) {
     const trimmed = member.trim();
     if (trimmed === '') {
       continue;
     }
-    const memberMatch = /^(\w+)\s*:\s*([\w<>]+)$/.exec(trimmed);
+    const memberMatch = /^(\w+)\s*:\s*(.+)$/.exec(trimmed);
     if (!memberMatch) {
       throw new Error(`cannot parse member "${trimmed}"`);
     }
     const [, name, type] = memberMatch as unknown as [string, string, string];
-    const layout = TYPE_LAYOUTS[type];
+    const layout = typeLayout(type.replace(/\s+/g, ''));
     if (!layout) {
       throw new Error(`unsupported type ${type}`);
     }

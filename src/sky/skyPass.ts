@@ -1,7 +1,7 @@
 import { composeWgsl, createShaderModule } from '../core/shader';
 import type { FrameUniforms } from '../render/frameUniforms';
 import { DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, HDR_FORMAT } from '../render/renderConfig';
-import { WGSL } from '../shaders';
+import { SCENE_PRELUDE, WGSL } from '../shaders';
 
 /**
  * Draws the sky as a full-screen triangle at the far plane. Recorded after the
@@ -11,7 +11,7 @@ export class SkyPass {
   private constructor(private readonly pipeline: GPURenderPipeline) {}
 
   static async create(device: GPUDevice, frameUniforms: FrameUniforms): Promise<SkyPass> {
-    const shader = composeWgsl('sky', [WGSL.frame, WGSL.common, WGSL.skyCommon, WGSL.sky]);
+    const shader = composeWgsl('sky', [...SCENE_PRELUDE, WGSL.sky]);
     const module = await createShaderModule(device, shader);
     const pipeline = await device.createRenderPipelineAsync({
       label: 'sky',

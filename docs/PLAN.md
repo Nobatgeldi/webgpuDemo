@@ -41,9 +41,9 @@ src/core/
   canvasSize.ts          ResizeObserver, piksel oranı üst sınırı                (0)
   readback.ts            staging buffer halkası (mapAsync)                      (0)
   gpuTimer.ts            timestamp-query ile GPU süreleri                       (0)
-  urlParams.ts           ?wind=&dir=&seed=&quality=&paused=                     (0)
+  urlParams.ts           ?wind=&dir=&seed=&quality=&paused=&bench=              (0, 6)
   random.ts              seed'li PRNG + Box-Muller Gauss                        (1)
-  constants.ts           g, ρ_su, ρ_hava, ν (kinematik viskozite)               (1)
+  constants.ts           fiziksel sabitler (g; ρ, ν Faz 3'te)                   (1)
 src/render/
   renderConfig.ts, camera.ts, frameUniforms.ts, renderTargets.ts             (0)
   tonemapPass.ts         ACES/AgX + sRGB + dither                              (0)
@@ -52,19 +52,23 @@ src/render/
   debugTextureView.ts    FFT/spektrum doku görüntüleyici                       (2)
   debugLines.ts          kuvvet vektörleri, batmış üçgenler                    (3)
 src/ocean/
+  oceanConfig.ts         kaskad boyutları/bantları, kalite ön ayarları        (1)
   beaufort.ts            Bf ↔ m/s tablosu (doğrulama referansı)                (1)
   spectrumModel.ts       JONSWAP, yön dağılımı, fetch sınırı, Hs (CPU referansı) (1)
-  spectrum.ts            GPU h0 üretimi (compute), rüzgâr geçişi               (1)
+  spectrum.ts            GPU h0 üretimi (compute)                              (1)
   fftReference.ts        WGSL FFT'nin TS referansı (testler için)             (1)
   fft.ts                 GPU FFT (workgroup shared memory, Stockham radix-2)  (1)
   cascades.ts            3 kaskad, zaman evrimi, çıktı dokuları, mipmap        (1)
   oceanMesh.ts           kamera merkezli clipmap halkaları, morph, snap        (1)
   oceanPass.ts           okyanus çizimi                                        (1, 2)
+  ocean.ts               simülasyon + çizimi birleştiren sınıf                 (1)
   windState.ts           hedef rüzgâra ~1 (m/s)/s ile yaklaşma                 (1)
+src/core/bindings.ts     bind group layout girdisi yardımcıları               (1)
   foam.ts                Jacobian köpüğü, ping-pong kalıcı köpük               (2)
   waterQuery.ts          GPU yükseklik sorgusu + WaterHeightProvider (GPU)    (3)
 src/sky/
-  skyModel.ts, skyPass.ts   F0: analitik gradyan                               (0)
+  skyPass.ts             gökyüzü çizimi                                          (0)
+  atmosphereModel.ts     atmosfer fiziği, CPU referansı + WGSL sabitleri      (2)
   atmosphere.ts          fiziksel tek saçılım: transmittance + sky-view LUT    (2, skyModel'in yerini alır)
 src/ship/
   shipConfig.ts          ~50 m devriye gemisi parametreleri                    (3)
@@ -75,14 +79,21 @@ src/ship/
   hydrodynamics.ts       ITTC-1957 sürtünme, basınç sürüklemesi, yalpa sönümü  (3)
   shipRenderer.ts        gövde + üst yapı çizimi                               (3)
   propulsion.ts          pervane (RPM gecikmesi, itki) + dümen (C_L, stall, propwash) (4)
-  wind.ts                bağıl rüzgâr kuvveti ve momenti                       (5)
+  helm.ts                gaz kolu ve dümen emri (tuş hızı, sıfır tırnağı)      (4)
+src/core/spring.ts       kritik sönümlü yay (tam çözüm), açı sarma             (4)
+src/core/benchmark.ts    ?bench=1 kalite ön ayarı ölçümü                       (6)
+src/quality.ts           kalite ön ayarları (okyanus, köpük alanı, sprey)      (6)
+e2e/smoke.e2e.ts         Playwright smoke testi                                (6)
+  wind.ts                bağıl rüzgâr yükü, silüetten rüzgâr alanları          (5)
 src/camera/
-  orbitCamera.ts         F0 orbit kamera                                        (0)
-  thirdPersonCamera.ts   takip / serbest orbit / köprüüstü modları             (4)
+  shipCamera.ts          takip / serbest orbit / köprüüstü modları (F0 orbitCamera'nın yerini aldı) (4)
 src/effects/
-  wake.ts                dümen suyu köpük izi (gemi merkezli kayan doku)       (5)
+  shipEffectSources.ts   köpük/sprey kaynakları (Froude, itki, baş giriş hızı)  (5)
+  wake.ts                dümen suyu köpük izi (gemi merkezli toroidal doku)    (5)
   spray.ts               baş dalgası/sprey compute parçacıkları                (5)
-  flag.ts                Verlet kumaş bayrak (bağıl rüzgâr)                    (5)
+  flagCloth.ts           Verlet/PBD kumaş bayrak (bağıl rüzgâr)                (5)
+  flagRenderer.ts        bayrak çizimi (prosedürel Türk bayrağı)               (5)
+  shipEffects.ts         efektleri birleştiren sınıf                           (5)
 src/input/input.ts                                                            (0)
 src/ui/ panel.ts, hud.ts, debugOverlay.ts, errorScreen.ts                    (0+)
 src/shaders/*.wgsl       her geçişin WGSL kaynağı (?raw import)                (0+)
@@ -99,7 +110,7 @@ dither, reversed-Z derinlik, orbit kamera, analitik gökyüzü gradyanı, debug
 referans ızgarası, lil-gui panel, HUD (FPS, CPU/GPU süresi), debug katmanı,
 URL parametre ayrıştırıcı, birim testleri.
 
-### Faz 1 — Okyanus çekirdeği
+### Faz 1 — Okyanus çekirdeği ✅
 1. `beaufort.ts` + test (Bf ↔ m/s).
 2. `spectrumModel.ts`: JONSWAP (α = 0.076 χ^−0.22, ω_p = 22 (g/U) χ^−0.33,
    γ = 3.3), Donelan-Banner yön dağılımı, rüzgâra ters bileşen bastırma, U → 0
@@ -119,7 +130,7 @@ URL parametre ayrıştırıcı, birim testleri.
 8. `oceanPass.ts`: temel shading (Fresnel + gökyüzü + güneş), sis.
 9. Panel: Beaufort ↔ m/s senkron kaydırıcılar, yön, fetch, choppiness; HUD: Hs.
 
-### Faz 2 — Görsel kalite
+### Faz 2 — Görsel kalite ✅
 Fiziksel atmosfer (Rayleigh + Mie + ozon, Hillaire tarzı LUT'lar), güneş
 diski ve ışınımı atmosferden; Schlick Fresnel, GGX güneş parlaması, gökyüzü
 yansıması, SSS yaklaşımı, Jacobian köpüğü + kalıcı köpük (ping-pong, üstel
@@ -127,27 +138,31 @@ sönüm, rüzgârla kalibre edilen örtü oranı), mesafe/eğim varyansına bağ
 pürüzlülük (LEAN/Toksvig benzeri), sis/atmosferik perspektif, uzakta tiling'i
 kırmak için düşük frekanslı modülasyon, FFT/spektrum doku görüntüleyici.
 
-### Faz 3 — Gemi ve yüzerlik
+### Faz 3 — Gemi ve yüzerlik ✅
 `WaterQuery` (sabit nokta iterasyonu ile x + D(x) = p çözümü, staging halkası),
 `WaterHeightProvider`, parametrik gövde, rijit cisim, Kerner üçgen yüzerliği,
 sönüm (ITTC-1957, basınç sürüklemesi, yalpa sönümü), fizik testleri (denge
 draftı ±%5, sürüklenmeme, 15° yalpanın sönümü), debug görselleştirme.
 
-### Faz 4 — Sürüş ve kamera
+### Faz 4 — Sürüş ve kamera ✅
 Pervane (−%50…+%100 gaz, RPM zaman sabiti, sudan çıkınca itki kesilmesi),
 dümen (±35°, ~5°/s, C_L(α) + stall, propwash), klavye kontrolleri,
 third-person kamera (kritik sönümlü yaw takibi, hafif yalpa yansıtma, 3 s sonra
 varsayılana dönüş, su ve gövde çarpışması), köprüüstü kamerası, tam HUD.
 
-### Faz 5 — Rüzgâr etkileri ve detay
+### Faz 5 — Rüzgâr etkileri ve detay ✅
 Gemiye bağıl rüzgâr kuvveti (heel + sürüklenme; test: yan rüzgârda rüzgâr
-altına yatma), opsiyonel rüzgâr akıntısı (~%3 U10), dümen suyu köpük izi,
-baş dalgası/sprey compute parçacıkları, bayrak.
+altına yatma), dümen suyu köpük izi, baş dalgası/sprey compute parçacıkları,
+bayrak. Opsiyonel rüzgâr akıntısı (~%3 U10) yapılmadı.
 
-### Faz 6 — Cilalama
-Kalite ön ayarları (FFT 128/256/512, kaskad sayısı, LOD halka sayısı),
-performans ölçümü ve optimizasyon (hedef: RTX 3060 1440p Yüksek ≥ 60 FPS,
-entegre GPU Düşük ≥ 30 FPS), opsiyonel Playwright smoke testi, README.
+### Faz 6 — Cilalama ✅
+Kalite ön ayarları (FFT 128/256/512, kaskad sayısı, LOD halka sayısı 8/9/10,
+köpük alanı ve sprey bütçesi), panelden çalışma anında kalite değişimi,
+performans ölçümü (kare süresi istatistiği, `?bench=1` otomatik ölçüm) ve
+kare başına bellek ayırmayı azaltma, ufuktaki piksel boşluklarının giderilmesi,
+Playwright smoke testi (`npm run test:e2e`), README. Hedef donanımda ölçüm
+kullanıcıya kalır (`?bench=1`; hedef: RTX 3060 1440p Yüksek ≥ 60 FPS, entegre
+GPU Düşük ≥ 30 FPS).
 
 ## Önceden görülen teknik kararlar
 

@@ -1,5 +1,5 @@
 import { composeWgsl, createShaderModule } from '../core/shader';
-import { WGSL } from '../shaders';
+import { SCENE_PRELUDE, WGSL } from '../shaders';
 import type { FrameUniforms } from './frameUniforms';
 import { DEPTH_COMPARE_CLOSER, DEPTH_FORMAT, HDR_FORMAT } from './renderConfig';
 
@@ -15,7 +15,7 @@ export class GridPass {
   private constructor(private readonly pipeline: GPURenderPipeline) {}
 
   static async create(device: GPUDevice, frameUniforms: FrameUniforms): Promise<GridPass> {
-    const shader = composeWgsl('grid', [WGSL.frame, WGSL.common, WGSL.skyCommon, WGSL.grid]);
+    const shader = composeWgsl('grid', [...SCENE_PRELUDE, WGSL.grid]);
     const module = await createShaderModule(device, shader);
     const pipeline = await device.createRenderPipelineAsync({
       label: 'grid',

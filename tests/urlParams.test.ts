@@ -11,6 +11,7 @@ describe('parseLaunchOptions', () => {
       seed: 1,
       quality: 'high',
       paused: true,
+      benchmark: false,
     });
   });
 
@@ -23,7 +24,16 @@ describe('parseLaunchOptions', () => {
       seed: DEFAULT_SEED,
       quality: DEFAULT_QUALITY,
       paused: false,
+      benchmark: false,
     });
+  });
+
+  it('parses the benchmark flag', () => {
+    expect(parseLaunchOptions('?bench=1').options.benchmark).toBe(true);
+    expect(parseLaunchOptions('?bench').options.benchmark).toBe(true);
+    const { options, warnings } = parseLaunchOptions('?bench=often');
+    expect(options.benchmark).toBe(false);
+    expect(warnings).toHaveLength(1);
   });
 
   it('clamps Beaufort, wraps direction and accepts fractional wind', () => {

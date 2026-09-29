@@ -19,6 +19,8 @@ export class Camera {
   readonly position: Vec3d = vec3d.create(0, 10, 0);
   /** Unit view direction in world space. */
   readonly forward: Vec3d = vec3d.create(0, 0, -1);
+  /** Approximate up direction (world up by default; tilted for camera roll). */
+  readonly up: Vec3d = vec3d.create(0, 1, 0);
 
   fovYRad = CAMERA_DEFAULT_FOV_Y_DEG * DEG_TO_RAD;
   near = CAMERA_NEAR_M;
@@ -54,12 +56,16 @@ export class Camera {
   /** Recomputes all matrices from position/forward/projection parameters. */
   updateMatrices(): void {
     // View matrix with the camera at the origin (camera-relative rendering).
-    vec3d.cross(this.forward, WORLD_UP, this.crossD);
+    vec3d.cross(this.forward, this.up, this.crossD);
     if (vec3d.length(this.crossD) < PARALLEL_UP_EPSILON) {
-      // Looking straight up or down: use world -Z as a stable reference instead.
-      vec3d.set(0, 0, -1, this.upD);
+      // Looking along the up vector: use world -Z (or world up) as a stable reference instead.
+      if (vec3d.length(vec3d.cross(this.forward, WORLD_UP, this.crossD)) < PARALLEL_UP_EPSILON) {
+        vec3d.set(0, 0, -1, this.upD);
+      } else {
+        vec3d.copy(WORLD_UP, this.upD);
+      }
     } else {
-      vec3d.copy(WORLD_UP, this.upD);
+      vec3d.copy(this.up, this.upD);
     }
     mat4d.lookAt(this.originD, this.forward, this.upD, this.viewD);
     mat4d.perspectiveReverseZ(this.fovYRad, this.aspect, this.near, this.far, this.projD);
